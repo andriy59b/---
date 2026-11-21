@@ -1,0 +1,31 @@
+name: Kubik PSP
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  host-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run host tests
+        run: make -C psp/tests check
+
+  eboot:
+    runs-on: ubuntu-latest
+    container: pspdev/pspdev:latest
+    steps:
+      - name: Install build tools
+        run: apk add --no-cache make
+      - uses: actions/checkout@v4
+      - name: Build EBOOT.PBP
+        run: make -C psp
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kubik-psp
+          path: |
+            psp/EBOOT.PBP
+            psp/kubik.prx
+          if-no-files-found: warn

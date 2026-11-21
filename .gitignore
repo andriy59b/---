@@ -1,0 +1,7 @@
+*.o
+*.elf
+*.prx
+*.SFO
+EBOOT.PBP
+psp/tests/host_test
+world.dat
