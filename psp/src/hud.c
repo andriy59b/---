@@ -223,7 +223,7 @@ void hud_inventory(int cursor, const Level *L)
 
 void hud_intro(int slide, float t)
 {
-    char shown[512], lines[8][160], year[8];
+    char shown[512], lines[8][160], year[24];
     int n, i;
     r_begin_2d();
     overlay(0x90000000u);
