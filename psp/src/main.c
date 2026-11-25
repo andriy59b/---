@@ -45,7 +45,7 @@ static volatile int running = 1;
 
 static int mode = MODE_SPLASH, settings_return = MODE_MENU, loading_next = MODE_PLAY;
 static int has_save, in_game;
-static float mode_t;
+static float mode_time;
 
 static int car_idx = -1;
 static float cam_yaw, body_yaw;
@@ -366,7 +366,7 @@ static void begin_session(int next)
     if (L.has_car) spawn_family_car(L.car_pos, L.car_yaw);
     loading_next = next;
     mode = MODE_LOADING;
-    mode_t = 0.0f;
+    mode_time = 0.0f;
     synth_music(-1);
 }
 
@@ -507,7 +507,7 @@ static void queue_dialog(const StoryOut *o)
     }
     if (dlg_n > dlg_i && mode == MODE_PLAY) {
         mode = MODE_DIALOG;
-        mode_t = 0.0f;
+        mode_time = 0.0f;
     }
 }
 
@@ -592,7 +592,7 @@ int main(void)
         last_time = now;
         if (dt > 0.05f) dt = 0.05f;
         clock_s += dt;
-        mode_t += dt;
+        mode_time += dt;
         fps_acc += dt;
         fps_frames++;
         if (fps_acc >= 0.5f) {
@@ -612,9 +612,9 @@ int main(void)
         /* -------------------------------------------------- menus & input */
         switch (mode) {
         case MODE_SPLASH:
-            if ((pressed & (PSP_CTRL_CROSS | PSP_CTRL_START)) || mode_t > 7.0f) {
+            if ((pressed & (PSP_CTRL_CROSS | PSP_CTRL_START)) || mode_time > 7.0f) {
                 mode = MODE_MENU;
-                mode_t = 0.0f;
+                mode_time = 0.0f;
                 synth_sfx(SFX_CONFIRM);
             }
             break;
@@ -635,7 +635,7 @@ int main(void)
                 switch (menu_sel) {
                 case MENU_CONTINUE: begin_session(MODE_PLAY); break;
                 case MENU_NEW:
-                    if (has_save) { mode = MODE_CONFIRM; mode_t = 0.0f; }
+                    if (has_save) { mode = MODE_CONFIRM; mode_time = 0.0f; }
                     else new_game();
                     break;
                 case MENU_SETTINGS: settings_return = MODE_MENU; mode = MODE_SETTINGS; menu_sel = 0; break;
@@ -678,10 +678,10 @@ int main(void)
             int slide = (int)L.story.step;
             if (pressed & PSP_CTRL_CROSS) {
                 synth_sfx(SFX_UI);
-                if (slide < STORY_INTRO_SLIDES && mode_t * 35.0f < (float)strlen(STORY_INTRO[slide])) mode_t = 100.0f;
+                if (slide < STORY_INTRO_SLIDES && mode_time * 35.0f < (float)strlen(STORY_INTRO[slide])) mode_time = 100.0f;
                 else {
                     L.story.step = slide + 1;
-                    mode_t = 0.0f;
+                    mode_time = 0.0f;
                     if (L.story.step >= STORY_INTRO_SLIDES) {
                         L.story.step = 0;
                         mode = MODE_PLAY;
@@ -737,12 +737,12 @@ int main(void)
         case MODE_DIALOG:
             if (pressed & PSP_CTRL_CROSS) {
                 synth_sfx(SFX_UI);
-                if (mode_t * 45.0f < (float)strlen(dlg_text[dlg_i])) mode_t = 100.0f;
+                if (mode_time * 45.0f < (float)strlen(dlg_text[dlg_i])) mode_time = 100.0f;
                 else if (++dlg_i >= dlg_n) {
                     dlg_i = dlg_n = 0;
                     mode = MODE_PLAY;
                 } else {
-                    mode_t = 0.0f;
+                    mode_time = 0.0f;
                 }
             }
             break;
@@ -946,7 +946,7 @@ int main(void)
                     show_banner(story_title(&L.story), NULL);
                 }
                 mode = loading_next;
-                mode_t = 0.0f;
+                mode_time = 0.0f;
             }
             r_begin_frame(0xFF000000u);
             hud_loading(done, total, "Завантаження Соняшниківська...");
@@ -990,18 +990,18 @@ int main(void)
         }
 
         switch (mode) {
-        case MODE_SPLASH:    hud_splash(mode_t); break;
+        case MODE_SPLASH:    hud_splash(mode_time); break;
         case MODE_MENU:      hud_main_menu(menu_sel, has_save, clock_s); break;
         case MODE_CONFIRM:
             hud_main_menu(MENU_NEW, has_save, clock_s);
             hud_confirm("Почати нову гру? Поточне збереження буде втрачено.", "✕ — так, нова гра", "○ — ні");
             break;
         case MODE_SETTINGS:  hud_settings(menu_sel, &L); break;
-        case MODE_INTRO:     hud_intro(L.story.step < STORY_INTRO_SLIDES ? L.story.step : 0, mode_t); break;
+        case MODE_INTRO:     hud_intro(L.story.step < STORY_INTRO_SLIDES ? L.story.step : 0, mode_time); break;
         case MODE_PAUSE:     hud_pause(menu_sel); break;
         case MODE_INVENTORY: hud_inventory(inv_cursor, &L); break;
         case MODE_DIALOG:
-            if (dlg_i < dlg_n) hud_dialog(dlg_speaker[dlg_i], dlg_text[dlg_i], mode_t);
+            if (dlg_i < dlg_n) hud_dialog(dlg_speaker[dlg_i], dlg_text[dlg_i], mode_time);
             break;
         default: {
             float mp[3];
