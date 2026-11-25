@@ -9,6 +9,10 @@
 #include "../src/mesh.h"
 #include "../src/textures.h"
 #include "../src/world.h"
+#include "../src/story.h"
+#include "../src/synth.h"
+#include "../src/town.h"
+#include "../src/vehicle.h"
 
 static int failures;
 #define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); failures++; } } while (0)
@@ -304,6 +308,204 @@ static void test_mesh_split(void)
     clean_dir();
 }
 
+
+static int free_cell(const float p[3])
+{
+    int x = (int)floorf(p[0]), y = (int)floorf(p[1]), z = (int)floorf(p[2]);
+    return !block_solid(world_get(x, y, z)) && !block_solid(world_get(x, y + 1, z)) &&
+           block_solid(world_get(x, y - 1, z));
+}
+
+static void test_town(void)
+{
+    const float *pois[] = { POI_SPAWN, POI_GARAGE, POI_CAR, POI_MARKET, POI_KIOSK, POI_KABAN };
+    int i, x, z, roads = 0, lines = 0, buildings = 0;
+    clean_dir();
+    world_init(SEED, TEST_DIR);
+    for (i = 0; i < 6; i++) {
+        int cx = (int)floorf(pois[i][0]) >> 4, cz = (int)floorf(pois[i][2]) >> 4;
+        load_area(cx, cz, 1);
+        if (!free_cell(pois[i])) printf("POI %d at %.1f %.1f %.1f is blocked\n", i, pois[i][0], pois[i][1], pois[i][2]);
+        CHECK(free_cell(pois[i]));
+        CHECK(town_contains((int)pois[i][0], (int)pois[i][2]));
+    }
+    /* the garage door and kiosk sign exist where the story says */
+    CHECK(world_get(48 + 12, TOWN_Y + 1, 14) == B_GARAGE_DOOR);
+    CHECK(world_get(96 + 21, TOWN_Y + 3, -96 + 20) == B_SIGN_BEER);
+    CHECK(world_get(17, TOWN_Y + 1, 28) == B_DOOR);
+
+    for (z = -16; z < 48; z++)
+        for (x = -16; x < 48; x++) {
+            int top = world_top(x, z), b;
+            if (top < 0) continue;
+            b = world_get(x, top, z);
+            if (town_is_road(x, z)) {
+                roads++;
+                if (b == B_ROAD_LINE_X || b == B_ROAD_LINE_Z) lines++;
+            }
+            if (top > TOWN_Y + 8) buildings++;
+        }
+    CHECK(roads > 500 && lines > 20 && buildings > 100);
+    CHECK(town_lot_type(0, 0) == LOT_PANEL5 && town_lot_type(1, 0) == LOT_GARAGES);
+    CHECK(gen_column(SEED, 0, 0, NULL) == TOWN_Y);
+    {
+        int bio;
+        gen_column(SEED, 10, 10, &bio);
+        CHECK(bio == BIOME_TOWN);
+        CHECK(strcmp(biome_name(BIOME_TOWN), "Соняшниківськ") == 0);
+    }
+    world_shutdown();
+    clean_dir();
+}
+
+static void test_vehicles(void)
+{
+    int dx, dz, i, t, z, offroad = 0, samples = 0, pc;
+    float focus[3] = { 30.0f, TOWN_Y + 1.0f, 30.0f }, out[3];
+    clean_dir();
+    world_init(SEED, TEST_DIR);
+    for (dz = -6; dz <= 6; dz++)
+        for (dx = -6; dx <= 6; dx++) world_load_chunk(dx, dz);
+    cars_clear();
+    for (t = 0; t < 60 * 60; t++) {
+        cars_update(1.0f / 60, focus, NULL, 1);
+        for (i = 0; i < MAX_CARS; i++) {
+            const Car *c = &cars[i];
+            if (c->kind != CAR_TRAFFIC) continue;
+            samples++;
+            if (!town_is_road((int)floorf(c->pos[0]), (int)floorf(c->pos[2]))) offroad++;
+        }
+    }
+    printf("traffic: %d car-frames, %d off road\n", samples, offroad);
+    CHECK(samples > 1000 && offroad == 0);
+
+    /* traffic stops for a pedestrian standing in its lane */
+    cars_clear();
+    i = car_spawn(CAR_TRAFFIC, 60.0f, TOWN_Y + 1.0f, 5.0f, car_dir_yaw(0), 0xFFFFFFFFu);
+    cars[i].dir = 0; cars[i].next_dir = 0; cars[i].speed = 8.0f;
+    {
+        float foot[3] = { 70.0f, TOWN_Y + 1.0f, 5.0f };
+        for (t = 0; t < 60 * 5; t++) cars_update(1.0f / 60, focus, foot, 0);
+        CHECK(cars[i].pos[0] < 70.0f - CAR_HALF_L);
+        CHECK(cars[i].speed < 0.5f);
+    }
+
+    /* the player drives along the road, then hits a wall and stops */
+    cars_clear();
+    pc = car_spawn(CAR_PLAYER, 60.0f, TOWN_Y + 1.0f, 3.5f, car_dir_yaw(0), 0xFFFFFFFFu);
+    for (t = 0; t < 60 * 3; t++) car_physics(&cars[pc], 1.0f, 0.0f, 1.0f / 60);
+    CHECK(cars[pc].pos[0] > 80.0f && fabsf(cars[pc].pos[1] - (TOWN_Y + 1)) < 0.01f);
+    for (z = 0; z < 7; z++)
+        for (t = 1; t < 4; t++) world_set(130, TOWN_Y + t, z, B_BRICK);
+    for (t = 0; t < 60 * 6; t++) car_physics(&cars[pc], 1.0f, 0.0f, 1.0f / 60);
+    CHECK(cars[pc].pos[0] < 130.0f - 1.9f);
+    car_exit_point(&cars[pc], out);
+    CHECK(fabsf(out[0] - cars[pc].pos[0]) < 3.0f);
+    {
+        float px = cars[pc].pos[0], pz = cars[pc].pos[2];
+        CHECK(car_push_out(&cars[pc], &px, &pz, 0.3f));
+        CHECK(!car_push_out(&cars[pc], &px, &pz, 0.29f));
+    }
+    world_shutdown();
+    clean_dir();
+}
+
+static void teleport(StoryView *v, const float p[3]) { v->pos[0] = p[0]; v->pos[1] = p[1]; v->pos[2] = p[2]; }
+
+static void test_story(void)
+{
+    Story s;
+    StoryView v;
+    StoryOut o;
+    float m[3];
+    int i;
+    story_start(&s);
+    memset(&v, 0, sizeof(v));
+    CHECK(s.mission == M_HOME && story_marker(&s, m));
+    teleport(&v, POI_SPAWN);
+    story_update(&s, &v, 0.1f, &o);
+    CHECK(s.mission == M_HOME && o.lines == 0);
+    teleport(&v, POI_GARAGE);
+    story_update(&s, &v, 0.1f, &o);
+    CHECK(s.mission == M_MARKET && o.spawn_own_car && o.lines >= 3 && o.mission_passed);
+    teleport(&v, POI_MARKET);
+    story_update(&s, &v, 0.1f, &o);
+    CHECK(s.mission == M_MARKET && o.lines == 0); /* must take the car first */
+    v.in_car = v.in_own_car = 1;
+    story_update(&s, &v, 0.1f, &o);
+    story_update(&s, &v, 0.1f, &o);
+    CHECK(s.mission == M_PARCEL && s.timer > 100.0f);
+    /* running out of time restarts the timer */
+    teleport(&v, POI_SPAWN);
+    for (i = 0; i < 200 && !o.mission_failed; i++) story_update(&s, &v, 1.0f, &o);
+    CHECK(o.mission_failed && s.mission == M_PARCEL && s.timer > 100.0f);
+    teleport(&v, POI_KIOSK);
+    story_update(&s, &v, 0.1f, &o);
+    CHECK(s.mission == M_TAIL && o.spawn_chaser && s.money == 800000);
+    v.chaser_alive = 1;
+    v.chaser_dist = 20.0f;
+    for (i = 0; i < 100; i++) story_update(&s, &v, 0.1f, &o);
+    CHECK(s.mission == M_TAIL);
+    v.chaser_dist = 120.0f;
+    for (i = 0; i < 50 && s.mission == M_TAIL; i++) story_update(&s, &v, 0.1f, &o);
+    CHECK(s.mission == M_KABAN && o.remove_chaser);
+    teleport(&v, POI_KABAN);
+    story_update(&s, &v, 0.1f, &o);
+    CHECK(s.mission == M_FREE && o.lines >= 4 && !story_marker(&s, m));
+    for (i = M_HOME; i <= M_FREE; i++) {
+        s.mission = i;
+        CHECK(strlen(story_title(&s)) > 0 && strlen(story_objective(&s)) > 0);
+    }
+}
+
+static void test_synth(void)
+{
+    static short buf[SYNTH_RATE * 2];
+    int t, c, i, peak;
+    double sum;
+    synth_init();
+    for (t = 0; t < MUS_COUNT; t++) {
+        int lead = synth_track_steps(t, 0);
+        CHECK(lead > 0);
+        for (c = 1; c < 4; c++) {
+            int n = synth_track_steps(t, c);
+            CHECK(n > 0 && lead % n == 0); /* every channel loops in step with the lead */
+        }
+        synth_music(t);
+        synth_render(buf, SYNTH_RATE);
+        sum = 0.0;
+        peak = 0;
+        for (i = 0; i < SYNTH_RATE * 2; i++) {
+            sum += (double)buf[i] * buf[i];
+            if (abs(buf[i]) > peak) peak = abs(buf[i]);
+        }
+        CHECK(sqrt(sum / (SYNTH_RATE * 2)) > 1000.0 && peak < 32767);
+    }
+    synth_music(-1);
+    for (i = 0; i < SFX_COUNT; i++) synth_sfx(i);
+    synth_engine(1, 0.7f);
+    synth_render(buf, SYNTH_RATE);
+    sum = 0.0;
+    for (i = 0; i < SYNTH_RATE * 2; i++) sum += (double)buf[i] * buf[i];
+    CHECK(sum > 0.0);
+}
+
+static void test_text(void)
+{
+    const char *s = "Ґанок Їжака";
+    const char *p = s;
+    unsigned int cps[16];
+    int n = 0;
+    while (*p && n < 16) cps[n++] = utf8_next(&p);
+    CHECK(n == 11 && cps[0] == 0x490 && cps[6] == 0x407);
+    CHECK(font_glyph('A') == font_glyph(0x410));          /* Cyrillic А = Latin A */
+    CHECK(font_glyph(0x491) == font_glyph(0x490));        /* ґ -> Ґ */
+    CHECK(font_glyph(0x44F) == font_glyph(0x42F));        /* я -> Я */
+    CHECK(font_glyph(0x42F) >= 64 && font_glyph(0x42F) < 128);
+    CHECK(font_glyph(0x2715) >= 64);                      /* ✕ */
+    CHECK(font_glyph(0x4E2D) == font_glyph('?'));
+}
+
 static void test_textures(void)
 {
     static unsigned int atlas[ATLAS_SIZE * ATLAS_SIZE], font[FONT_TEX_W * FONT_TEX_H];
@@ -327,6 +529,11 @@ int main(void)
     test_persistence();
     test_mesh_split();
     test_textures();
+    test_town();
+    test_vehicles();
+    test_story();
+    test_synth();
+    test_text();
     if (failures) {
         printf("%d check(s) failed\n", failures);
         return 1;

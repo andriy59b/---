@@ -1,5 +1,5 @@
-#ifndef KUBIK_RENDER_H
-#define KUBIK_RENDER_H
+#ifndef UC_RENDER_H
+#define UC_RENDER_H
 
 #define SCR_W 480
 #define SCR_H 272
@@ -36,5 +36,14 @@ void r_rect(float x, float y, float w, float h, unsigned int color);
 void r_text(float x, float y, int scale, unsigned int color, const char *s);
 int  r_text_width(int scale, const char *s);
 void r_block_icon(float x, float y, float size, int block);
+
+/* Entities (call after r_camera, before r_night_overlay) */
+void r_car(const float pos[3], float yaw, unsigned int body, int lights, const SkyState *s);
+void r_player_model(const float pos[3], float yaw, float walk, float brightness, const SkyState *s);
+void r_marker(const float pos[3], float t);
+
+/* 2D extras */
+void r_arrow(float cx, float cy, float angle, float size, unsigned int color);
+void r_gradient(float x, float y, float w, float h, unsigned int top, unsigned int bottom);
 
 #endif

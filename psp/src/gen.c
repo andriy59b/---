@@ -1,5 +1,6 @@
 #include "gen.h"
 #include "world.h"
+#include "town.h"
 
 #include <math.h>
 #include <string.h>
@@ -83,7 +84,7 @@ static float smoothstep(float a, float b, float x)
 /* ----------------------------------------------------------------- terrain */
 
 static const char *BIOME_NAMES[BIOME_COUNT] = {
-    "Ocean", "Beach", "Plains", "Forest", "Desert", "Snowy Taiga", "Mountains",
+    "Озеро", "Берег", "Степ", "Ліс", "Піски", "Сніги", "Гори", "Соняшниківськ",
 };
 
 const char *biome_name(int biome)
@@ -116,6 +117,22 @@ int gen_column(unsigned int seed, int x, int z, int *biome)
     else if (temp > 0.58f && hum < 0.5f) b = BIOME_DESERT;
     else if (hum > 0.53f) b = BIOME_FOREST;
     else b = BIOME_PLAINS;
+
+    {
+        int d = town_distance(x, z);
+        if (d == 0) {
+            if (biome) *biome = BIOME_TOWN;
+            return TOWN_Y;
+        }
+        if (d < 64) {
+            float t = smoothstep(0.0f, 64.0f, (float)d);
+            hi = (int)(TOWN_Y + (hi - TOWN_Y) * t + 0.5f);
+            if (b == BIOME_SNOW || b == BIOME_DESERT || b == BIOME_MOUNTAINS) b = BIOME_PLAINS;
+            if (hi >= SEA_LEVEL + 1 && (b == BIOME_OCEAN || b == BIOME_BEACH)) b = BIOME_PLAINS;
+        } else if (d < 220 && (b == BIOME_SNOW || b == BIOME_DESERT)) {
+            b = BIOME_PLAINS; /* temperate surroundings */
+        }
+    }
 
     if (biome) *biome = b;
     return hi;
@@ -282,7 +299,7 @@ void gen_chunk(unsigned int seed, int cx, int cz, unsigned char *b)
                 float fx = (x & 3) * 0.25f, a, c;
                 unsigned char *cell = &b[BIDX(x, y, z)];
                 if (*cell == B_AIR || *cell == B_WATER || *cell == B_BEDROCK || *cell == B_ICE) continue;
-                if (!(y < h - 4 || (h > SEA_LEVEL + 3 && y <= h))) continue;
+                if (col_b[z + PAD][x + PAD] == BIOME_TOWN ? y >= h - 6 : !(y < h - 4 || (h > SEA_LEVEL + 3 && y <= h))) continue;
 #define TRI(f) lerp(lerp(lerp(f[gy][gz][gx], f[gy][gz][gx + 1], fx), lerp(f[gy][gz + 1][gx], f[gy][gz + 1][gx + 1], fx), fz), \
                     lerp(lerp(f[gy + 1][gz][gx], f[gy + 1][gz][gx + 1], fx), lerp(f[gy + 1][gz + 1][gx], f[gy + 1][gz + 1][gx + 1], fx), fz), fy)
                 a = TRI(cave1) - 0.5f;
@@ -343,6 +360,14 @@ void gen_chunk(unsigned int seed, int cx, int cz, unsigned char *b)
             if (bio == BIOME_DESERT && top == B_SAND && hs % 90u == 0) {
                 int n = 1 + (int)((hs >> 8) % 3u);
                 for (i = 1; i <= n; i++) b[BIDX(x, h + i, z)] = B_CACTUS;
+            } else if (top == B_GRASS && bio == BIOME_PLAINS &&
+                       noise2(seed + 808u, wx / 36.0f, wz / 36.0f) > 0.62f) {
+                /* fields: rows of sunflowers or wheat with furrows between */
+                int sun = noise2(seed + 809u, wx / 90.0f, wz / 90.0f) > 0.5f;
+                if (wx % 4 != 0) {
+                    b[BIDX(x, h, z)] = B_DIRT;
+                    b[BIDX(x, h + 1, z)] = sun ? B_SUNFLOWER : B_WHEAT;
+                }
             } else if (top == B_GRASS) {
                 unsigned int grass = bio == BIOME_PLAINS ? 4u : (bio == BIOME_FOREST ? 7u : 10u);
                 if (hs % 41u == 0)
@@ -350,5 +375,13 @@ void gen_chunk(unsigned int seed, int cx, int cz, unsigned char *b)
                 else if (hs % grass == 0)
                     b[BIDX(x, h + 1, z)] = B_TALL_GRASS;
             }
+        }
+
+    /* ---- town and highway on top of everything ---- */
+    for (z = 0; z < CH; z++)
+        for (x = 0; x < CH; x++) {
+            int wx = x0 + x, wz = z0 + z;
+            if (town_contains(wx, wz)) town_column(wx, wz, b, x, z);
+            else town_highway_column(wx, wz, col_h[z + PAD][x + PAD], b, x, z);
         }
 }

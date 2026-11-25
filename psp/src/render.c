@@ -589,15 +589,25 @@ void r_rect(float x, float y, float w, float h, unsigned int color)
     sceGuEnable(GU_TEXTURE_2D);
 }
 
+static int utf8_len(const char *s)
+{
+    int n = 0;
+    while (*s) {
+        utf8_next(&s);
+        n++;
+    }
+    return n;
+}
+
 int r_text_width(int scale, const char *s)
 {
-    int n = (int)strlen(s);
+    int n = utf8_len(s);
     return n ? (n * 6 - 1) * scale : 0;
 }
 
 void r_text(float x, float y, int scale, unsigned int color, const char *s)
 {
-    int n = (int)strlen(s), i, pass;
+    int n = utf8_len(s), i, pass;
     FVertex *v;
     if (!n) return;
     bind_font();
@@ -605,15 +615,11 @@ void r_text(float x, float y, int scale, unsigned int color, const char *s)
     for (pass = 0; pass < 2; pass++) {
         unsigned int col = pass == 0 ? (color & 0xFF000000u) | 0x202020u : color;
         float off = pass == 0 ? (float)scale : 0.0f;
+        const char *p = s;
         v = (FVertex *)sceGuGetMemory((unsigned int)n * 2 * sizeof(FVertex));
         for (i = 0; i < n; i++) {
-            int ch = (unsigned char)s[i], g;
-            float gx, gy;
-            if (ch >= 'a' && ch <= 'z') ch -= 32;
-            if (ch < 32 || ch > 95) ch = '?';
-            g = ch - 32;
-            gx = (float)((g % 16) * 8);
-            gy = (float)((g / 16) * 8);
+            int g = font_glyph(utf8_next(&p));
+            float gx = (float)((g % 16) * 8), gy = (float)((g / 16) * 8);
             v[i * 2].u = gx;        v[i * 2].v = gy;
             v[i * 2].color = col;
             v[i * 2].x = x + off + i * 6 * scale; v[i * 2].y = y + off; v[i * 2].z = 0;
@@ -670,4 +676,222 @@ void r_block_icon(float x, float y, float s, int block)
         icon_face(v + 12, right, block_tile(block, F_PX), 0.58f);
         sceGuDrawArray(GU_TRIANGLES, VT_F2D, 18, 0, v);
     }
+}
+
+/* ------------------------------------------------------- boxes and models */
+
+static CVertex *bx_buf;
+static int bx_n, bx_cap;
+
+static void bx_begin(int boxes)
+{
+    bx_cap = boxes * 36;
+    bx_buf = (CVertex *)sceGuGetMemory((unsigned int)bx_cap * sizeof(CVertex));
+    bx_n = 0;
+}
+
+static void bx_add(float x0, float y0, float z0, float x1, float y1, float z1, unsigned int color)
+{
+    static const int ORDER[6] = { 0, 1, 2, 0, 2, 3 };
+    int f, i;
+    if (bx_n + 36 > bx_cap) return;
+    for (f = 0; f < 6; f++) {
+        unsigned int col = scale_color(color, CUBE_SHADE[f], color >> 24);
+        for (i = 0; i < 6; i++) {
+            const signed char *cc = CUBE_CORNERS[f][ORDER[i]];
+            CVertex *v = &bx_buf[bx_n++];
+            v->color = col;
+            v->x = cc[0] ? x1 : x0;
+            v->y = cc[1] ? y1 : y0;
+            v->z = cc[2] ? z1 : z0;
+        }
+    }
+}
+
+static void bx_draw(void)
+{
+    if (bx_n) sceGumDrawArray(GU_TRIANGLES, VT_C3D, bx_n, 0, bx_buf);
+    bx_n = 0;
+}
+
+static void model_matrix(const float pos[3], float yaw)
+{
+    ScePspFVector3 t;
+    t.x = pos[0];
+    t.y = pos[1];
+    t.z = pos[2];
+    sceGumMatrixMode(GU_MODEL);
+    sceGumLoadIdentity();
+    sceGumTranslate(&t);
+    sceGumRotateY(yaw);
+}
+
+static void entity_state(int fog_on, const SkyState *s)
+{
+    sceGuDisable(GU_TEXTURE_2D);
+    sceGuDisable(GU_BLEND);
+    sceGuDisable(GU_ALPHA_TEST);
+    sceGuEnable(GU_DEPTH_TEST);
+    sceGuDepthMask(GU_FALSE);
+    if (fog_on) {
+        sceGuEnable(GU_FOG);
+        sceGuFog(s->fog_start, s->fog_end, s->fog);
+    } else {
+        sceGuDisable(GU_FOG);
+    }
+}
+
+static void entity_done(void)
+{
+    sceGuDisable(GU_FOG);
+    sceGuEnable(GU_TEXTURE_2D);
+    sceGuEnable(GU_ALPHA_TEST);
+    sceGumMatrixMode(GU_MODEL);
+    sceGumLoadIdentity();
+}
+
+void r_car(const float pos[3], float yaw, unsigned int body, int lights, const SkyState *s)
+{
+    const unsigned int glass = 0xFF3C2A22u, black = 0xFF1A1A1Au, chrome = 0xFF9A9A9Au;
+    unsigned int head = lights ? 0xFFC8F8FFu : 0xFFA0D0E0u, tail = lights ? 0xFF2020FFu : 0xFF1818A0u;
+    entity_state(1, s);
+    model_matrix(pos, yaw);
+    bx_begin(16);
+    bx_add(-0.9f, 0.35f, -2.0f, 0.9f, 0.95f, 2.0f, body);          /* lower body */
+    bx_add(-0.82f, 0.95f, -0.7f, 0.82f, 1.45f, 1.25f, glass);      /* cabin windows */
+    bx_add(-0.84f, 1.45f, -0.6f, 0.84f, 1.55f, 1.15f, body);       /* roof */
+    bx_add(-0.84f, 0.95f, -0.75f, -0.74f, 1.45f, -0.6f, body);     /* A pillars */
+    bx_add(0.74f, 0.95f, -0.75f, 0.84f, 1.45f, -0.6f, body);
+    bx_add(-0.92f, 0.3f, -2.06f, 0.92f, 0.5f, -1.95f, chrome);     /* bumpers */
+    bx_add(-0.92f, 0.3f, 1.95f, 0.92f, 0.5f, 2.06f, chrome);
+    bx_add(-0.85f, 0.62f, -2.04f, -0.55f, 0.8f, -1.99f, head);     /* headlights */
+    bx_add(0.55f, 0.62f, -2.04f, 0.85f, 0.8f, -1.99f, head);
+    bx_add(-0.85f, 0.62f, 1.99f, -0.6f, 0.78f, 2.04f, tail);       /* tail lights */
+    bx_add(0.6f, 0.62f, 1.99f, 0.85f, 0.78f, 2.04f, tail);
+    bx_add(-0.25f, 0.5f, -2.08f, 0.25f, 0.62f, -2.05f, 0xFFF0F0F0u); /* number plate */
+    bx_add(-1.0f, 0.0f, -1.65f, -0.72f, 0.62f, -1.0f, black);      /* wheels */
+    bx_add(0.72f, 0.0f, -1.65f, 1.0f, 0.62f, -1.0f, black);
+    bx_add(-1.0f, 0.0f, 1.0f, -0.72f, 0.62f, 1.65f, black);
+    bx_add(0.72f, 0.0f, 1.0f, 1.0f, 0.62f, 1.65f, black);
+    bx_draw();
+    entity_done();
+}
+
+static void limb(const float pivot[3], float angle, float x0, float y0, float z0, float x1, float y1, float z1,
+                 unsigned int color, unsigned int color2, float split)
+{
+    ScePspFVector3 t;
+    sceGumPushMatrix();
+    t.x = pivot[0]; t.y = pivot[1]; t.z = pivot[2];
+    sceGumTranslate(&t);
+    sceGumRotateX(angle);
+    t.x = -pivot[0]; t.y = -pivot[1]; t.z = -pivot[2];
+    sceGumTranslate(&t);
+    bx_begin(2);
+    bx_add(x0, split, z0, x1, y1, z1, color);
+    bx_add(x0 - 0.005f, y0, z0 - 0.005f, x1 + 0.005f, split, z1 + 0.005f, color2);
+    bx_draw();
+    sceGumPopMatrix();
+}
+
+void r_player_model(const float pos[3], float yaw, float walk, float brightness, const SkyState *s)
+{
+    const unsigned int suit = scale_color(0xFF8C3228u, brightness, 0xFF);   /* blue tracksuit */
+    const unsigned int stripe = scale_color(0xFFF0F0F0u, brightness, 0xFF);
+    const unsigned int skin = scale_color(0xFF96B4E0u, brightness, 0xFF);
+    const unsigned int hair = scale_color(0xFF1E2A3Au, brightness, 0xFF);
+    const unsigned int shoe = scale_color(0xFFD8D8D8u, brightness, 0xFF);
+    float swing = sinf(walk) * 0.6f;
+    float hipL[3] = { -0.14f, 0.75f, 0.0f }, hipR[3] = { 0.14f, 0.75f, 0.0f };
+    float shL[3] = { -0.37f, 1.36f, 0.0f }, shR[3] = { 0.37f, 1.36f, 0.0f };
+
+    entity_state(1, s);
+    model_matrix(pos, yaw);
+    limb(hipL, swing, -0.27f, 0.0f, -0.13f, -0.02f, 0.75f, 0.13f, suit, shoe, 0.12f);
+    limb(hipR, -swing, 0.02f, 0.0f, -0.13f, 0.27f, 0.75f, 0.13f, suit, shoe, 0.12f);
+    limb(shL, -swing * 0.8f, -0.46f, 0.82f, -0.11f, -0.28f, 1.42f, 0.11f, suit, skin, 0.92f);
+    limb(shR, swing * 0.8f, 0.28f, 0.82f, -0.11f, 0.46f, 1.42f, 0.11f, suit, skin, 0.92f);
+    bx_begin(8);
+    bx_add(-0.28f, 0.75f, -0.15f, 0.28f, 1.42f, 0.15f, suit);         /* torso */
+    bx_add(-0.02f, 0.8f, -0.16f, 0.02f, 1.4f, -0.15f, stripe);        /* zip */
+    bx_add(-0.29f, 1.0f, -0.1f, -0.28f, 1.4f, 0.1f, stripe);          /* side stripes */
+    bx_add(0.28f, 1.0f, -0.1f, 0.29f, 1.4f, 0.1f, stripe);
+    bx_add(-0.2f, 1.42f, -0.2f, 0.2f, 1.82f, 0.2f, skin);             /* head */
+    bx_add(-0.21f, 1.76f, -0.21f, 0.21f, 1.86f, 0.21f, hair);         /* buzz cut */
+    bx_add(-0.21f, 1.5f, 0.17f, 0.21f, 1.82f, 0.21f, hair);
+    bx_add(-0.12f, 1.62f, -0.205f, 0.12f, 1.66f, -0.2f, 0xFF201818u); /* eyes */
+    bx_draw();
+    entity_done();
+}
+
+void r_marker(const float pos[3], float t)
+{
+    const int sides = 10;
+    const float r = 0.8f, h = 2.4f;
+    CVertex *v = (CVertex *)sceGuGetMemory(sides * 6 * sizeof(CVertex));
+    float bob = 0.15f * sinf(t * 3.0f);
+    int i, n = 0;
+    for (i = 0; i < sides; i++) {
+        float a0 = i * 6.2831853f / sides, a1 = (i + 1) * 6.2831853f / sides;
+        float x0 = pos[0] + cosf(a0) * r, z0 = pos[2] + sinf(a0) * r;
+        float x1 = pos[0] + cosf(a1) * r, z1 = pos[2] + sinf(a1) * r;
+        unsigned int lo = 0x9020D8FFu, hi = 0x0020D8FFu;
+        CVertex q[4] = {
+            { lo, x0, pos[1] + bob, z0 }, { hi, x0, pos[1] + h + bob, z0 },
+            { hi, x1, pos[1] + h + bob, z1 }, { lo, x1, pos[1] + bob, z1 },
+        };
+        v[n++] = q[0]; v[n++] = q[1]; v[n++] = q[2];
+        v[n++] = q[0]; v[n++] = q[2]; v[n++] = q[3];
+    }
+    sceGumMatrixMode(GU_MODEL);
+    sceGumLoadIdentity();
+    sceGuDisable(GU_TEXTURE_2D);
+    sceGuDisable(GU_ALPHA_TEST);
+    sceGuDisable(GU_FOG);
+    sceGuEnable(GU_BLEND);
+    sceGuEnable(GU_DEPTH_TEST);
+    sceGuDepthMask(GU_TRUE);
+    sceGumDrawArray(GU_TRIANGLES, VT_C3D, n, 0, v);
+    sceGuDepthMask(GU_FALSE);
+    /* spinning diamond above */
+    {
+        float p[3] = { pos[0], pos[1] + h + 0.6f + bob, pos[2] };
+        model_matrix(p, t * 2.0f);
+        bx_begin(1);
+        bx_add(-0.25f, -0.25f, -0.06f, 0.25f, 0.25f, 0.06f, 0xFF20D8FFu);
+        bx_draw();
+    }
+    sceGuDisable(GU_BLEND);
+    entity_done();
+}
+
+void r_arrow(float cx, float cy, float angle, float size, unsigned int color)
+{
+    CVertex *v = (CVertex *)sceGuGetMemory(3 * sizeof(CVertex));
+    float s = sinf(angle), c = cosf(angle);
+    float pts[3][2] = { { 0.0f, -size }, { size * 0.7f, size * 0.7f }, { -size * 0.7f, size * 0.7f } };
+    int i;
+    for (i = 0; i < 3; i++) {
+        v[i].color = color;
+        v[i].x = cx + pts[i][0] * c - pts[i][1] * s;
+        v[i].y = cy + pts[i][0] * s + pts[i][1] * c;
+        v[i].z = 0.0f;
+    }
+    sceGuDisable(GU_TEXTURE_2D);
+    sceGuDrawArray(GU_TRIANGLES, VT_C2D, 3, 0, v);
+    sceGuEnable(GU_TEXTURE_2D);
+}
+
+void r_gradient(float x, float y, float w, float h, unsigned int top, unsigned int bottom)
+{
+    CVertex *v = (CVertex *)sceGuGetMemory(6 * sizeof(CVertex));
+    v[0].color = top;    v[0].x = x;     v[0].y = y;     v[0].z = 0;
+    v[1].color = top;    v[1].x = x + w; v[1].y = y;     v[1].z = 0;
+    v[2].color = bottom; v[2].x = x + w; v[2].y = y + h; v[2].z = 0;
+    v[3] = v[0];
+    v[4] = v[2];
+    v[5].color = bottom; v[5].x = x;     v[5].y = y + h; v[5].z = 0;
+    sceGuDisable(GU_TEXTURE_2D);
+    sceGuDrawArray(GU_TRIANGLES, VT_C2D, 6, 0, v);
+    sceGuEnable(GU_TEXTURE_2D);
 }

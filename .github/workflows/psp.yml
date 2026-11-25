@@ -1,4 +1,4 @@
-name: Kubik PSP
+name: UkraineCraft PSP
 
 on:
   push:
@@ -24,8 +24,8 @@ jobs:
         run: make -C psp
       - uses: actions/upload-artifact@v4
         with:
-          name: kubik-psp
+          name: ukrainecraft-psp
           path: |
             psp/EBOOT.PBP
-            psp/kubik.prx
+            psp/ukrainecraft.prx
           if-no-files-found: warn

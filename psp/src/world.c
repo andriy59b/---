@@ -14,36 +14,52 @@
 #define TSIDE(side, top, bot) { side, side, top, bot, side, side }
 
 const BlockInfo BLOCKS[B_COUNT] = {
-    /* name             shape         solid opaque tiles */
-    { "Air",            SHAPE_NONE,   0, 0, T6(0) },
-    { "Grass",          SHAPE_CUBE,   1, 1, TSIDE(1, 0, 2) },
-    { "Dirt",           SHAPE_CUBE,   1, 1, T6(2) },
-    { "Stone",          SHAPE_CUBE,   1, 1, T6(3) },
-    { "Sand",           SHAPE_CUBE,   1, 1, T6(4) },
-    { "Log",            SHAPE_CUBE,   1, 1, TSIDE(5, 6, 6) },
-    { "Leaves",         SHAPE_CUBE,   1, 0, T6(7) },
-    { "Planks",         SHAPE_CUBE,   1, 1, T6(8) },
-    { "Glass",          SHAPE_CUBE,   1, 0, T6(9) },
-    { "Bricks",         SHAPE_CUBE,   1, 1, T6(10) },
-    { "Water",          SHAPE_LIQUID, 0, 0, T6(11) },
-    { "Cobblestone",    SHAPE_CUBE,   1, 1, T6(12) },
-    { "Bedrock",        SHAPE_CUBE,   1, 1, T6(13) },
-    { "Gravel",         SHAPE_CUBE,   1, 1, T6(14) },
-    { "Snowy Grass",    SHAPE_CUBE,   1, 1, TSIDE(16, 15, 2) },
-    { "Snow",           SHAPE_CUBE,   1, 1, T6(15) },
-    { "Ice",            SHAPE_CUBE,   1, 1, T6(17) },
-    { "Cactus",         SHAPE_CUBE,   1, 1, TSIDE(18, 19, 19) },
-    { "Coal Ore",       SHAPE_CUBE,   1, 1, T6(20) },
-    { "Iron Ore",       SHAPE_CUBE,   1, 1, T6(21) },
-    { "Gold Ore",       SHAPE_CUBE,   1, 1, T6(22) },
-    { "Crystal Ore",    SHAPE_CUBE,   1, 1, T6(23) },
-    { "Tall Grass",     SHAPE_CROSS,  0, 0, T6(24) },
-    { "Red Flower",     SHAPE_CROSS,  0, 0, T6(25) },
-    { "Yellow Flower",  SHAPE_CROSS,  0, 0, T6(26) },
-    { "Birch Log",      SHAPE_CUBE,   1, 1, TSIDE(27, 6, 6) },
-    { "Birch Leaves",   SHAPE_CUBE,   1, 0, T6(28) },
-    { "Sandstone",      SHAPE_CUBE,   1, 1, TSIDE(29, 30, 30) },
-    { "Stone Bricks",   SHAPE_CUBE,   1, 1, T6(31) },
+    /* name                    shape         solid opaque tiles */
+    { "Повітря",               SHAPE_NONE,   0, 0, T6(0) },
+    { "Трава",                 SHAPE_CUBE,   1, 1, TSIDE(1, 0, 2) },
+    { "Земля",                 SHAPE_CUBE,   1, 1, T6(2) },
+    { "Камінь",                SHAPE_CUBE,   1, 1, T6(3) },
+    { "Пісок",                 SHAPE_CUBE,   1, 1, T6(4) },
+    { "Колода",                SHAPE_CUBE,   1, 1, TSIDE(5, 6, 6) },
+    { "Листя",                 SHAPE_CUBE,   1, 0, T6(7) },
+    { "Дошки",                 SHAPE_CUBE,   1, 1, T6(8) },
+    { "Скло",                  SHAPE_CUBE,   1, 0, T6(9) },
+    { "Цегла",                 SHAPE_CUBE,   1, 1, T6(10) },
+    { "Вода",                  SHAPE_LIQUID, 0, 0, T6(11) },
+    { "Бруківка",              SHAPE_CUBE,   1, 1, T6(12) },
+    { "Скельна основа",        SHAPE_CUBE,   1, 1, T6(13) },
+    { "Гравій",                SHAPE_CUBE,   1, 1, T6(14) },
+    { "Засніжена трава",       SHAPE_CUBE,   1, 1, TSIDE(16, 15, 2) },
+    { "Сніг",                  SHAPE_CUBE,   1, 1, T6(15) },
+    { "Лід",                   SHAPE_CUBE,   1, 1, T6(17) },
+    { "Кактус",                SHAPE_CUBE,   1, 1, TSIDE(18, 19, 19) },
+    { "Вугілля",               SHAPE_CUBE,   1, 1, T6(20) },
+    { "Залізна руда",          SHAPE_CUBE,   1, 1, T6(21) },
+    { "Золота руда",           SHAPE_CUBE,   1, 1, T6(22) },
+    { "Кристали",              SHAPE_CUBE,   1, 1, T6(23) },
+    { "Висока трава",          SHAPE_CROSS,  0, 0, T6(24) },
+    { "Мак",                   SHAPE_CROSS,  0, 0, T6(25) },
+    { "Кульбаба",              SHAPE_CROSS,  0, 0, T6(26) },
+    { "Береза",                SHAPE_CUBE,   1, 1, TSIDE(27, 6, 6) },
+    { "Березове листя",        SHAPE_CUBE,   1, 0, T6(28) },
+    { "Пісковик",              SHAPE_CUBE,   1, 1, TSIDE(29, 30, 30) },
+    { "Кам'яна цегла",         SHAPE_CUBE,   1, 1, T6(31) },
+    { "Асфальт",               SHAPE_CUBE,   1, 1, TSIDE(34, 34, 34) },
+    { "Розмітка",              SHAPE_CUBE,   1, 1, TSIDE(34, 35, 34) },
+    { "Розмітка",              SHAPE_CUBE,   1, 1, TSIDE(34, 36, 34) },
+    { "Тротуар",               SHAPE_CUBE,   1, 1, TSIDE(49, 37, 49) },
+    { "Бетонна панель",        SHAPE_CUBE,   1, 1, T6(38) },
+    { "Вікно",                 SHAPE_CUBE,   1, 1, TSIDE(39, 49, 49) },
+    { "Побілка",               SHAPE_CUBE,   1, 1, T6(40) },
+    { "Черепиця",              SHAPE_CUBE,   1, 1, T6(41) },
+    { "Бляха",                 SHAPE_CUBE,   1, 1, T6(42) },
+    { "Ворота гаража",         SHAPE_CUBE,   1, 1, TSIDE(43, 42, 42) },
+    { "Ларьок",                SHAPE_CUBE,   1, 1, T6(44) },
+    { "Вивіска «Пиво»",        SHAPE_CUBE,   1, 1, TSIDE(45, 42, 42) },
+    { "Двері",                 SHAPE_CUBE,   1, 1, TSIDE(46, 8, 8) },
+    { "Соняшник",              SHAPE_CROSS,  0, 0, T6(47) },
+    { "Пшениця",               SHAPE_CROSS,  0, 0, T6(48) },
+    { "Бетон",                 SHAPE_CUBE,   1, 1, T6(49) },
 };
 
 int block_solid(int b)
@@ -150,6 +166,20 @@ void world_init(unsigned int seed, const char *dir)
     } else {
         saved_overflow = 1; /* cannot list: probe files instead */
     }
+}
+
+void world_wipe(const char *dir)
+{
+    DIR *d = opendir(dir);
+    struct dirent *e;
+    char path[512];
+    if (!d) return;
+    while ((e = readdir(d)) != NULL) {
+        if (strncmp(e->d_name, "c.", 2) != 0) continue;
+        snprintf(path, sizeof(path), "%s/%s", dir, e->d_name);
+        remove(path);
+    }
+    closedir(d);
 }
 
 unsigned int world_seed(void) { return g_seed; }

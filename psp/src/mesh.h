@@ -1,5 +1,5 @@
-#ifndef KUBIK_MESH_H
-#define KUBIK_MESH_H
+#ifndef UC_MESH_H
+#define UC_MESH_H
 
 #include "world.h"
 

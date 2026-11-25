@@ -1,6 +1,6 @@
-/* Kubik — voxel sandbox for PSP. Streaming chunked world, raycast, physics. */
-#ifndef KUBIK_WORLD_H
-#define KUBIK_WORLD_H
+/* UkraineCraft — voxel sandbox for PSP. Streaming chunked world, raycast, physics. */
+#ifndef UC_WORLD_H
+#define UC_WORLD_H
 
 #define CH 16                 /* chunk width (x and z) */
 #define WH 64                 /* world height */
@@ -40,6 +40,22 @@ enum {
     B_BIRCH_LEAVES,
     B_SANDSTONE,
     B_STONE_BRICKS,
+    B_ASPHALT,
+    B_ROAD_LINE_X,   /* centre line of a road running along X */
+    B_ROAD_LINE_Z,
+    B_SIDEWALK,
+    B_PANEL,         /* prefab concrete wall */
+    B_PANEL_WINDOW,
+    B_PLASTER,       /* whitewashed village wall */
+    B_ROOF,
+    B_METAL,         /* corrugated sheet metal */
+    B_GARAGE_DOOR,
+    B_KIOSK,
+    B_SIGN_BEER,
+    B_DOOR,
+    B_SUNFLOWER,
+    B_WHEAT,
+    B_CONCRETE,
     B_COUNT
 };
 
@@ -91,6 +107,7 @@ typedef struct {
 #define BIDX(x, y, z) ((((y) * CH) + (z)) * CH + (x))
 
 void world_init(unsigned int seed, const char *dir);
+void world_wipe(const char *dir);           /* deletes all saved chunks in dir */
 unsigned int world_seed(void);
 const char *world_dir(void);
 void world_shutdown(void);           /* saves modified chunks, frees memory */

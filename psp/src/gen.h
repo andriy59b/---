@@ -1,5 +1,5 @@
-#ifndef KUBIK_GEN_H
-#define KUBIK_GEN_H
+#ifndef UC_GEN_H
+#define UC_GEN_H
 
 enum {
     BIOME_OCEAN = 0,
@@ -9,6 +9,7 @@ enum {
     BIOME_DESERT,
     BIOME_SNOW,
     BIOME_MOUNTAINS,
+    BIOME_TOWN,
     BIOME_COUNT
 };
 
