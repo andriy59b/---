@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <dirent.h>
 
 /* ---------------------------------------------------------------- blocks */
 
@@ -81,8 +82,50 @@ static int slot_index(int cx, int cz)
     return sz * SLOTS_W + sx;
 }
 
+/* Set of chunk coordinates that have a save file, so missing chunks can be
+ * generated without probing the memory stick. */
+#define SAVED_CAP 8192
+static unsigned int saved_keys[SAVED_CAP];
+static unsigned char saved_used[SAVED_CAP];
+static int saved_count, saved_overflow;
+
+static unsigned int saved_key(int cx, int cz)
+{
+    return (((unsigned int)cx & 0xFFFFu) << 16) | ((unsigned int)cz & 0xFFFFu);
+}
+
+static int saved_find(unsigned int k)
+{
+    unsigned int i = (k * 2654435761u) % SAVED_CAP;
+    while (saved_used[i] && saved_keys[i] != k) i = (i + 1) % SAVED_CAP;
+    return (int)i;
+}
+
+static void saved_add(int cx, int cz)
+{
+    unsigned int k = saved_key(cx, cz);
+    int i;
+    if (saved_count >= SAVED_CAP * 3 / 4) {
+        saved_overflow = 1;
+        return;
+    }
+    i = saved_find(k);
+    if (!saved_used[i]) {
+        saved_used[i] = 1;
+        saved_keys[i] = k;
+        saved_count++;
+    }
+}
+
+int world_has_saved(int cx, int cz)
+{
+    return saved_overflow || saved_used[saved_find(saved_key(cx, cz))];
+}
+
 void world_init(unsigned int seed, const char *dir)
 {
+    DIR *d;
+    struct dirent *e;
     int i;
     for (i = 0; i < SLOTS_W * SLOTS_W; i++) {
         free(slots[i].blocks);
@@ -90,10 +133,23 @@ void world_init(unsigned int seed, const char *dir)
         free(slots[i].water);
     }
     memset(slots, 0, sizeof(slots));
+    memset(saved_used, 0, sizeof(saved_used));
+    saved_count = saved_overflow = 0;
     g_seed = seed;
     strncpy(g_dir, dir, sizeof(g_dir) - 1);
     g_dir[sizeof(g_dir) - 1] = 0;
     mkdir(g_dir, 0777);
+
+    d = opendir(g_dir);
+    if (d) {
+        while ((e = readdir(d)) != NULL) {
+            int cx, cz;
+            if (sscanf(e->d_name, "c.%d.%d", &cx, &cz) == 2) saved_add(cx, cz);
+        }
+        closedir(d);
+    } else {
+        saved_overflow = 1; /* cannot list: probe files instead */
+    }
 }
 
 unsigned int world_seed(void) { return g_seed; }
@@ -105,7 +161,7 @@ static void chunk_path(char *buf, size_t n, int cx, int cz)
     snprintf(buf, n, "%s/c.%d.%d", g_dir, cx, cz);
 }
 
-static int chunk_save(const Chunk *c)
+static int chunk_save(Chunk *c)
 {
     char path[192];
     FILE *f;
@@ -115,6 +171,10 @@ static int chunk_save(const Chunk *c)
     if (!f) return 0;
     ok = fwrite(c->blocks, 1, CH_VOL, f) == CH_VOL;
     fclose(f);
+    if (ok) {
+        c->modified = 0;
+        saved_add(c->cx, c->cz);
+    }
     return ok;
 }
 
@@ -163,12 +223,10 @@ Chunk *world_chunk(int cx, int cz)
     return (c->loaded && c->cx == cx && c->cz == cz) ? c : NULL;
 }
 
-Chunk *world_load_chunk(int cx, int cz)
+/* Frees the slot for (cx, cz) and makes sure it has block storage. */
+static Chunk *claim_slot(int cx, int cz)
 {
     Chunk *c = &slots[slot_index(cx, cz)];
-    int x, z;
-
-    if (c->loaded && c->cx == cx && c->cz == cz) return c;
     evict(c);
     if (!c->blocks) {
         c->blocks = (unsigned char *)malloc(CH_VOL);
@@ -176,18 +234,49 @@ Chunk *world_load_chunk(int cx, int cz)
     }
     c->cx = cx;
     c->cz = cz;
-    if (chunk_read(c)) {
-        c->modified = 1;
-    } else {
-        gen_chunk(g_seed, cx, cz, c->blocks);
-        c->modified = 0;
-    }
+    return c;
+}
+
+static Chunk *finish_slot(Chunk *c)
+{
+    int x, z;
     for (z = 0; z < CH; z++)
         for (x = 0; x < CH; x++) column_height(c, x, z);
     c->loaded = 1;
+    c->modified = 0;
     c->mesh_dirty = 1;
     c->meshed = 0;
     return c;
+}
+
+Chunk *world_load_saved(int cx, int cz)
+{
+    Chunk *c = world_chunk(cx, cz);
+    if (c) return c;
+    c = claim_slot(cx, cz);
+    if (!c) return NULL;
+    if (!chunk_read(c)) return NULL;
+    return finish_slot(c);
+}
+
+Chunk *world_commit_chunk(int cx, int cz, const unsigned char *blocks)
+{
+    Chunk *c = world_chunk(cx, cz);
+    if (c) return c;
+    c = claim_slot(cx, cz);
+    if (!c) return NULL;
+    memcpy(c->blocks, blocks, CH_VOL);
+    return finish_slot(c);
+}
+
+Chunk *world_load_chunk(int cx, int cz)
+{
+    static unsigned char tmp[CH_VOL];
+    Chunk *c = world_chunk(cx, cz);
+    if (c) return c;
+    if (world_has_saved(cx, cz) && (c = world_load_saved(cx, cz)) != NULL) return c;
+    gen_chunk(g_seed, cx, cz, tmp);
+    return world_commit_chunk(cx, cz, tmp);
 }
 
 int world_neighbors_loaded(const Chunk *c)

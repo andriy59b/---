@@ -1,6 +1,7 @@
 /* Kubik — an original voxel sandbox for the PSP (PSPSDK + sceGu). */
 #include <pspkernel.h>
 #include <pspctrl.h>
+#include <psppower.h>
 
 #include <math.h>
 #include <stdio.h>
@@ -120,34 +121,94 @@ static void build_offsets(void)
 
 static int cheb(const Offset *o) { return abs(o->dx) > abs(o->dz) ? abs(o->dx) : abs(o->dz); }
 
-/* Generates/loads and meshes chunks nearest first, within a time budget. */
-static int stream_chunks(int pcx, int pcz, int radius, unsigned int budget_us)
-{
-    unsigned int start = now_us();
-    int i, work = 0, built = 0;
+/* ------------------------------------------------------------ worker thread
+ * Terrain generation and mesh building run on a lower-priority thread, so they
+ * only use the time the main thread spends waiting for the GPU and vblank. */
 
-    for (i = 0; i < n_offsets; i++) {
-        Chunk *c;
-        if (cheb(&offsets[i]) > radius) continue;
-        c = world_chunk(pcx + offsets[i].dx, pcz + offsets[i].dz);
-        if (!c || !c->mesh_dirty || !world_neighbors_loaded(c)) continue;
-        mesh_build(c);
-        built++;
-        if (now_us() - start > budget_us / 2) break;
+enum { JOB_IDLE = 0, JOB_BUSY, JOB_DONE };
+enum { JOB_GEN = 1, JOB_MESH };
+
+static volatile int job_state = JOB_IDLE;
+static int job_type, job_cx, job_cz;
+static unsigned char job_blocks[CH_VOL];
+static SceUID job_sema = -1;
+
+static int worker_thread(SceSize args, void *argp)
+{
+    (void)args; (void)argp;
+    for (;;) {
+        sceKernelWaitSema(job_sema, 1, NULL);
+        if (job_type == JOB_GEN) gen_chunk(L.seed, job_cx, job_cz, job_blocks);
+        else mesh_compute();
+        job_state = JOB_DONE;
     }
-    for (i = 0; i < n_offsets; i++) {
-        if (cheb(&offsets[i]) > radius + 1) continue;
-        if (world_chunk(pcx + offsets[i].dx, pcz + offsets[i].dz)) continue;
-        if (!world_load_chunk(pcx + offsets[i].dx, pcz + offsets[i].dz)) {
-            if (L.radius > 2) L.radius--; /* out of memory: draw less */
+    return 0;
+}
+
+static void start_worker(void)
+{
+    SceUID th;
+    job_sema = sceKernelCreateSema("kubik_job", 0, 0, 1, NULL);
+    th = sceKernelCreateThread("kubik_worker", worker_thread, 0x30, 0x10000, PSP_THREAD_ATTR_USER, NULL);
+    if (th >= 0) sceKernelStartThread(th, 0, NULL);
+}
+
+static void post_job(int type, int cx, int cz)
+{
+    job_type = type;
+    job_cx = cx;
+    job_cz = cz;
+    job_state = JOB_BUSY;
+    sceKernelSignalSema(job_sema, 1);
+}
+
+/* Commits finished work and hands the worker the next job, nearest chunks first:
+ * dirty meshes (edits) before missing terrain. Saved chunks load right here. */
+static void stream_chunks(int pcx, int pcz, int radius)
+{
+    int i, loads = 0;
+
+    if (job_state == JOB_DONE) {
+        if (job_type == JOB_GEN) {
+            if (abs(job_cx - pcx) <= radius + 2 && abs(job_cz - pcz) <= radius + 2 &&
+                !world_commit_chunk(job_cx, job_cz, job_blocks) && L.radius > 2)
+                L.radius--; /* out of memory: draw less */
+        } else {
+            Chunk *c = world_chunk(job_cx, job_cz);
+            if (c) {
+                mesh_commit(c);
+                r_flush_cache();
+            }
+        }
+        job_state = JOB_IDLE;
+    }
+
+    if (job_state == JOB_IDLE) {
+        for (i = 0; i < n_offsets; i++) {
+            Chunk *c;
+            if (cheb(&offsets[i]) > radius) continue;
+            c = world_chunk(pcx + offsets[i].dx, pcz + offsets[i].dz);
+            if (!c || !c->mesh_dirty || !world_neighbors_loaded(c)) continue;
+            mesh_gather(c);
+            post_job(JOB_MESH, c->cx, c->cz);
             break;
         }
-        work++;
-        if (now_us() - start > budget_us) break;
     }
+
+    for (i = 0; i < n_offsets && loads < 2; i++) {
+        int cx = pcx + offsets[i].dx, cz = pcz + offsets[i].dz;
+        if (cheb(&offsets[i]) > radius + 1) continue;
+        if (world_chunk(cx, cz)) continue;
+        if (job_state != JOB_IDLE && job_type == JOB_GEN && job_cx == cx && job_cz == cz) continue;
+        if (world_has_saved(cx, cz) && world_load_saved(cx, cz)) {
+            loads++;
+            continue;
+        }
+        if (job_state == JOB_IDLE) post_job(JOB_GEN, cx, cz);
+        break;
+    }
+
     world_free_far_meshes(pcx, pcz, radius + 1);
-    if (built) r_flush_cache();
-    return work + built;
 }
 
 static int area_ready(int pcx, int pcz, int radius)
@@ -425,8 +486,10 @@ int main(void)
     sceCtrlSetSamplingCycle(0);
     sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
 
+    scePowerSetClockFrequency(333, 333, 166);
     r_init();
     build_offsets();
+    start_worker();
 
     is_new = !level_load();
     if (is_new) level_defaults();
@@ -445,7 +508,7 @@ int main(void)
         int r = L.radius < 3 ? L.radius : 3, side = 2 * r + 1, total = side * side;
         while (running && !area_ready(pcx, pcz, r)) {
             int dx, dz, done = 0;
-            stream_chunks(pcx, pcz, r, 50000);
+            stream_chunks(pcx, pcz, r);
             for (dz = -r; dz <= r; dz++)
                 for (dx = -r; dx <= r; dx++) {
                     Chunk *c = world_chunk(pcx + dx, pcz + dz);
@@ -588,7 +651,7 @@ int main(void)
         /* --------------------------------------------------------- world */
         pcx = (int)floorf(player.pos[0]) >> 4;
         pcz = (int)floorf(player.pos[2]) >> 4;
-        stream_chunks(pcx, pcz, L.radius, 7000);
+        stream_chunks(pcx, pcz, L.radius);
 
         eye[0] = player.pos[0];
         eye[1] = player.pos[1] + PLAYER_EYE;
@@ -621,6 +684,7 @@ int main(void)
         r_end_frame();
     }
 
+    while (job_state == JOB_BUSY) sceKernelDelayThread(1000);
     level_save();
     world_shutdown();
     sceKernelExitGame();

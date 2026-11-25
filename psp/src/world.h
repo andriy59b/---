@@ -77,7 +77,7 @@ typedef struct {
 typedef struct {
     int cx, cz;
     unsigned char loaded;
-    unsigned char modified;   /* differs from generated terrain: save it */
+    unsigned char modified;   /* has changes not yet written to disk */
     unsigned char mesh_dirty;
     unsigned char meshed;
     unsigned char *blocks;    /* CH_VOL bytes, see BIDX */
@@ -98,6 +98,9 @@ int  world_save_all(void);
 
 Chunk *world_chunk(int cx, int cz);       /* loaded chunk or NULL */
 Chunk *world_load_chunk(int cx, int cz);  /* load from disk or generate; NULL on OOM */
+int    world_has_saved(int cx, int cz);       /* a save file exists for this chunk */
+Chunk *world_load_saved(int cx, int cz);      /* read the save file; NULL if missing/OOM */
+Chunk *world_commit_chunk(int cx, int cz, const unsigned char *blocks); /* install generated blocks */
 int  world_neighbors_loaded(const Chunk *c);
 void world_free_far_meshes(int pcx, int pcz, int radius);
 Chunk *world_slot(int i);                 /* 0 .. SLOTS_W*SLOTS_W-1 */

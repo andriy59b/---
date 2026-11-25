@@ -255,6 +255,52 @@ static void test_persistence(void)
     load_area(0, 0, 0);
     CHECK(world_get(1, 50, 1) == B_GLASS);
     world_shutdown();
+
+    /* saved-chunk registry survives a restart; save clears the modified flag */
+    world_init(SEED, TEST_DIR);
+    CHECK(world_has_saved(0, 0) && world_has_saved(-3, 2));
+    CHECK(!world_has_saved(7, 7));
+    load_area(0, 0, 0);
+    CHECK(!world_chunk(0, 0)->modified);
+    world_set(2, 50, 2, B_BRICK);
+    CHECK(world_chunk(0, 0)->modified);
+    CHECK(world_save_all());
+    CHECK(!world_chunk(0, 0)->modified);
+
+    /* generated chunks committed from a worker buffer */
+    {
+        static unsigned char buf[CH_VOL];
+        Chunk *c;
+        gen_chunk(SEED, 9, 9, buf);
+        c = world_commit_chunk(9, 9, buf);
+        CHECK(c && c->loaded && !c->modified && c->mesh_dirty);
+        CHECK(world_get(9 * CH, 0, 9 * CH) == B_BEDROCK);
+    }
+    world_shutdown();
+    clean_dir();
+}
+
+static void test_mesh_split(void)
+{
+    Chunk *c;
+    int ns;
+    clean_dir();
+    world_init(SEED, TEST_DIR);
+    load_area(2, 2, 1);
+    c = world_chunk(2, 2);
+    mesh_build(c);
+    ns = c->nsolid;
+    CHECK(!c->mesh_dirty);
+    world_set(2 * CH + 5, 62, 2 * CH + 5, B_GLASS);
+    CHECK(c->mesh_dirty);
+    mesh_gather(c);
+    CHECK(!c->mesh_dirty);
+    world_set(2 * CH + 6, 62, 2 * CH + 5, B_GLASS); /* edit while "computing" */
+    mesh_compute();
+    mesh_commit(c);
+    CHECK(c->meshed && c->nsolid == ns + 6); /* snapshot had one glass block */
+    CHECK(c->mesh_dirty);                     /* the later edit queues a rebuild */
+    world_shutdown();
     clean_dir();
 }
 
@@ -279,6 +325,7 @@ int main(void)
     test_mesh();
     test_raycast_physics();
     test_persistence();
+    test_mesh_split();
     test_textures();
     if (failures) {
         printf("%d check(s) failed\n", failures);

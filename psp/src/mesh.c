@@ -31,7 +31,21 @@ static const float FACE_SHADE[6] = { 0.80f, 0.80f, 1.00f, 0.50f, 0.65f, 0.65f };
 static const float AO_LEVEL[4] = { 1.00f, 0.78f, 0.62f, 0.48f };
 static const unsigned char CORNER_UV[4][2] = { { 0, 1 }, { 0, 0 }, { 1, 0 }, { 1, 1 } };
 
-static int opaque_at(int x, int y, int z) { return block_opaque(pb[y][z][x]); }
+static unsigned char opaque_tab[256], shape_tab[256];
+static int tables_ready;
+static int out_solid, out_water;
+
+static void init_tables(void)
+{
+    int i;
+    for (i = 0; i < 256; i++) {
+        opaque_tab[i] = (unsigned char)block_opaque(i);
+        shape_tab[i] = (unsigned char)block_shape(i);
+    }
+    tables_ready = 1;
+}
+
+#define opaque_at(x, y, z) opaque_tab[pb[y][z][x]]
 
 /* Sky light of a padded cell, -1 for opaque cells (excluded from averages). */
 static float light_at(int x, int y, int z)
@@ -63,9 +77,11 @@ static void tile_uv(int tile, int corner, unsigned short *u, unsigned short *v)
     *v = (unsigned short)(tv + inset + CORNER_UV[corner][1] * (span - 2 * inset));
 }
 
-static void gather(const Chunk *c)
+void mesh_gather(Chunk *c)
 {
     int x, z, y;
+    if (!tables_ready) init_tables();
+    c->mesh_dirty = 0;
     for (z = -1; z <= CH; z++)
         for (x = -1; x <= CH; x++) {
             int ox = x < 0 ? -1 : (x >= CH ? 1 : 0), oz = z < 0 ? -1 : (z >= CH ? 1 : 0);
@@ -85,8 +101,8 @@ static void gather(const Chunk *c)
 
 static int face_visible(int b, int n)
 {
-    if (block_shape(b) == SHAPE_LIQUID) return n != b && !block_opaque(n);
-    if (block_opaque(n)) return 0;
+    if (shape_tab[b] == SHAPE_LIQUID) return n != b && !opaque_tab[n];
+    if (opaque_tab[n]) return 0;
     return n != b || b == B_LEAVES || b == B_BIRCH_LEAVES;
 }
 
@@ -191,15 +207,14 @@ static Vertex *copy_out(const Vertex *src, int quads)
     return v;
 }
 
-int mesh_build(Chunk *c)
+void mesh_compute(void)
 {
     int x, y, z, f, ns = 0, nw = 0;
 
-    gather(c);
     for (y = 0; y < WH; y++)
         for (z = 0; z < CH; z++)
             for (x = 0; x < CH; x++) {
-                int b = pb[y + 1][z + 1][x + 1], shape = block_shape(b);
+                int b = pb[y + 1][z + 1][x + 1], shape = shape_tab[b];
                 if (shape == SHAPE_NONE) continue;
                 if (shape == SHAPE_CROSS) {
                     if (ns + 2 <= MAX_SOLID_QUADS)
@@ -216,14 +231,25 @@ int mesh_build(Chunk *c)
                     }
                 }
             }
+    out_solid = ns;
+    out_water = nw;
+}
 
+int mesh_commit(Chunk *c)
+{
     free(c->solid);
     free(c->water);
-    c->solid = copy_out(scratch_solid, ns);
-    c->water = copy_out(scratch_water, nw);
-    c->nsolid = c->solid ? ns : 0;
-    c->nwater = c->water ? nw : 0;
-    c->mesh_dirty = 0;
+    c->solid = copy_out(scratch_solid, out_solid);
+    c->water = copy_out(scratch_water, out_water);
+    c->nsolid = c->solid ? out_solid : 0;
+    c->nwater = c->water ? out_water : 0;
     c->meshed = 1;
-    return (ns == 0 || c->solid) && (nw == 0 || c->water);
+    return (out_solid == 0 || c->solid) && (out_water == 0 || c->water);
+}
+
+int mesh_build(Chunk *c)
+{
+    mesh_gather(c);
+    mesh_compute();
+    return mesh_commit(c);
 }
