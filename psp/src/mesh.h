@@ -1,29 +1,14 @@
 #ifndef KUBIK_MESH_H
 #define KUBIK_MESH_H
 
-/* Matches GU_TEXTURE_32BITF | GU_COLOR_8888 | GU_VERTEX_32BITF */
-typedef struct {
-    float u, v;
-    unsigned int color;
-    float x, y, z;
-} Vertex;
+#include "world.h"
 
-typedef struct {
-    Vertex *v;
-    int count;
-    int cap;
-} VertexBuf;
+#define ATLAS_SIZE 256
+#define ATLAS_TILES 8
+#define TILE_PX (ATLAS_SIZE / ATLAS_TILES)
 
-typedef struct {
-    VertexBuf solid; /* opaque + alpha-tested blocks */
-    VertexBuf water; /* translucent, drawn last */
-    int dirty;
-} ChunkMesh;
-
-#define ATLAS_SIZE 64
-#define ATLAS_TILES 4
-
-void mesh_build(ChunkMesh *m, int cx, int cz);
-void mesh_free(ChunkMesh *m);
+/* Builds the solid and water meshes of a chunk. All 8 neighbours must be
+ * loaded (see world_neighbors_loaded). Returns 0 when out of memory. */
+int mesh_build(Chunk *c);
 
 #endif
