@@ -206,7 +206,7 @@ static void level_defaults(void)
     L.yaw = POI_SPAWN_YAW;
     L.cam_yaw = POI_SPAWN_YAW;
     L.time = 0.1f;
-    L.radius = 4;
+    L.radius = 3;
     L.look_speed = 3;
     L.day_cycle = 1;
     L.music_vol = 7;
