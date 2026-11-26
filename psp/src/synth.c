@@ -1,6 +1,7 @@
 /* All music here is original, written for this game in the spirit of 90s
  * eurodance, estrada, a street waltz and garage rock. */
 #include "synth.h"
+#include "voice.h"
 
 #include <math.h>
 #include <string.h>
@@ -463,7 +464,7 @@ void synth_render(short *stereo, int frames)
         for (k = 0; k < MAX_SFX; k++)
             if (sfx[k].id >= 0) e += sfx_sample(&sfx[k]);
         e += engine_sample();
-        mix = m + e * vs;
+        mix = m * (voice_busy() ? 0.45f : 1.0f) + e * vs + voice_sample() * 0.9f;
         /* soft clip */
         if (mix > 1.0f) mix = 1.0f;
         else if (mix < -1.0f) mix = -1.0f;

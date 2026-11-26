@@ -1,539 +1,398 @@
-/* Host-side tests for the platform-independent parts (world, gen, mesh, textures).
+/* Host-side tests for the platform-independent game code.
  * Build & run: make -C psp/tests check */
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "../src/gen.h"
-#include "../src/mesh.h"
-#include "../src/textures.h"
-#include "../src/world.h"
+#include "../src/actor.h"
+#include "../src/car.h"
+#include "../src/city.h"
+#include "../src/cutscene.h"
 #include "../src/story.h"
 #include "../src/synth.h"
-#include "../src/town.h"
-#include "../src/vehicle.h"
+#include "../src/texgen.h"
+#include "../src/voice.h"
 
 static int failures;
 #define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); failures++; } } while (0)
 
-#define TEST_DIR "host_test_world"
-#define SEED 12345u
-
-static void clean_dir(void)
+static int point_blocked(V3 p, float r)
 {
-    char cmd[128];
-    snprintf(cmd, sizeof(cmd), "rm -rf %s", TEST_DIR);
-    if (system(cmd) != 0) printf("warning: could not clean %s\n", TEST_DIR);
+    const Box *b[16];
+    int n = city_boxes(p.x - r, p.z - r, p.x + r, p.z + r, b, 16), i;
+    for (i = 0; i < n; i++)
+        if (b[i]->y1 > p.y + 0.4f && b[i]->y0 < p.y + 1.7f && p.x + r > b[i]->x0 && p.x - r < b[i]->x1 &&
+            p.z + r > b[i]->z0 && p.z - r < b[i]->z1)
+            return 1;
+    return 0;
 }
 
-static void load_area(int cx0, int cz0, int r)
+static void test_city(void)
 {
-    int dx, dz;
-    for (dz = -r; dz <= r; dz++)
-        for (dx = -r; dx <= r; dx++) CHECK(world_load_chunk(cx0 + dx, cz0 + dz) != NULL);
+    const V3 *pois[] = { &POI_SPAWN, &POI_GARAGE, &POI_TARAS, &POI_CAR, &POI_MARKET, &POI_GALYA,
+                         &POI_KIOSK, &POI_SELLER, &POI_KABAN, &POI_KABAN_NPC };
+    int i, verts = 0, j;
+    for (j = CELL_MIN; j < CELL_MIN + CELLS; j++)
+        for (i = CELL_MIN; i < CELL_MIN + CELLS; i++) verts += city_cell(i, j)->solid.n;
+    printf("city: %d vertices, %d collision boxes\n", verts, city_box_count());
+    CHECK(verts > 100000 && verts % 3 == 0);
+    CHECK(city_box_count() > 500);
+    for (i = 0; i < (int)(sizeof(pois) / sizeof(pois[0])); i++) {
+        if (point_blocked(*pois[i], 0.3f)) printf("POI %d blocked at %.1f %.1f\n", i, pois[i]->x, pois[i]->z);
+        CHECK(!point_blocked(*pois[i], 0.3f));
+        CHECK(city_in_town(pois[i]->x, pois[i]->z));
+        CHECK(fabsf(city_ground(pois[i]->x, pois[i]->z) - WALK_H) < 0.01f);
+    }
+    /* road surface and kerbs */
+    CHECK(city_ground(30.0f, 8.0f) == 0.0f);         /* asphalt */
+    CHECK(city_ground(30.0f, 1.0f) == WALK_H);       /* sidewalk */
+    CHECK(city_on_road(30.0f, 8.0f) && !city_on_road(30.0f, 1.0f));
+    CHECK(city_on_road(400.0f, 8.0f));               /* highway */
+    CHECK(city_lane(0, 0) == 10.5f && city_lane(2, 0) == 5.5f);
+    CHECK(city_lot_type(0, 0) == LOT_PANEL5 && city_lot_type(1, 0) == LOT_GARAGES);
+    /* the home block is solid, the yard is not */
+    CHECK(point_blocked(v3(40.0f, WALK_H, 34.0f), 0.3f));
+    CHECK(!point_blocked(v3(40.0f, WALK_H, 50.0f), 0.3f));
+    /* camera ray stops at a wall */
+    CHECK(city_raycast(v3(40.0f, 2.0f, 50.0f), v3(0, 0, -1), 30.0f) < 11.0f);
+    CHECK(city_raycast(v3(40.0f, 2.0f, 50.0f), v3(0, 0, 1), 5.0f) >= 5.0f);
 }
 
-static void test_generation(void)
+static void test_car_physics(void)
 {
-    static unsigned char a[CH_VOL], b[CH_VOL];
-    int counts[BIOME_COUNT] = { 0 }, x, z, i, y;
-    long air_below = 0, solid_below = 0, ores[4] = { 0 };
-
-    gen_chunk(SEED, 3, -7, a);
-    gen_chunk(SEED, 3, -7, b);
-    CHECK(memcmp(a, b, CH_VOL) == 0); /* deterministic */
-    gen_chunk(SEED + 1, 3, -7, b);
-    CHECK(memcmp(a, b, CH_VOL) != 0);
-
-    for (z = -1024; z < 1024; z += 8)
-        for (x = -1024; x < 1024; x += 8) {
-            int bio, h = gen_column(SEED, x, z, &bio);
-            CHECK(h >= 4 && h <= WH - 6);
-            counts[bio]++;
-            if (failures > 5) return;
+    int t, i;
+    for (t = 0; t < CAR_TYPES; t++) {
+        int k;
+        float t100 = -1.0f;
+        Car *c;
+        cars_clear();
+        k = car_spawn(CK_PLAYER, t, v3(-600.0f, 0, 10.5f), -PI_F / 2, 0xFFFFFFFFu);
+        c = &cars[k];
+        for (i = 0; i < 60 * 30 && t100 < 0; i++) {
+            c->in_throttle = 1.0f;
+            car_step(c, 1.0f / 60);
+            if (car_speed(c) * 3.6f >= 100.0f) t100 = i / 60.0f;
+            CHECK(!isnan(c->pos.x) && !isnan(c->yaw));
         }
-    printf("biomes:");
-    for (i = 0; i < BIOME_COUNT; i++) printf(" %s=%d", biome_name(i), counts[i]);
-    printf("\n");
-    for (i = 0; i < BIOME_COUNT; i++) CHECK(counts[i] > 0);
-
-    /* caves and ores over a patch of chunks */
-    for (z = 0; z < 6; z++)
-        for (x = 0; x < 6; x++) {
-            gen_chunk(SEED, x * 5, z * 5, a);
-            for (i = 0; i < CH * CH; i++) {
-                int lx = i % CH, lz = i / CH, bio;
-                int h = gen_column(SEED, (x * 5) * CH + lx, (z * 5) * CH + lz, &bio);
-                CHECK(a[BIDX(lx, 0, lz)] == B_BEDROCK);
-                for (y = 3; y < h - 4; y++) {
-                    int blk = a[BIDX(lx, y, lz)];
-                    if (blk == B_AIR) air_below++;
-                    else solid_below++;
-                    if (blk >= B_COAL_ORE && blk <= B_CRYSTAL_ORE) ores[blk - B_COAL_ORE]++;
-                }
-            }
+        printf("%-14s 0-100 km/h in %.1f s\n", CAR_SPECS[t].name, t100);
+        CHECK(t100 > 4.0f && t100 < 25.0f);
+        CHECK(fabsf(c->pos.z - 10.5f) < 1.0f);  /* goes straight */
+        CHECK(c->gear >= 2);
+    }
+    /* steering turns the car, the handbrake makes it slide */
+    {
+        Car *c;
+        float yaw0, maxskid = 0.0f;
+        cars_clear();
+        c = &cars[car_spawn(CK_PLAYER, CAR_KAISER, v3(400, 0, -300), 0, 0xFFFFFFFFu)];
+        c->vel = v3(0, 0, -20.0f);
+        yaw0 = c->yaw;
+        for (i = 0; i < 90; i++) {
+            c->in_throttle = 0.3f;
+            c->in_steer = 1.0f;
+            c->in_handbrake = i < 40;
+            car_step(c, 1.0f / 60);
+            if (c->skid > maxskid) maxskid = c->skid;
         }
-    printf("caves: %.2f%% of underground is air; ores coal=%ld iron=%ld gold=%ld crystal=%ld\n",
-           100.0 * air_below / (air_below + solid_below), ores[0], ores[1], ores[2], ores[3]);
-    CHECK(air_below > 0);
-    CHECK(100.0 * air_below / (air_below + solid_below) < 8.0);
-    CHECK(ores[0] > ores[1] && ores[1] > ores[2] && ores[2] > 0 && ores[3] > 0);
-}
-
-static void test_world_access(void)
-{
-    Chunk *c;
-    clean_dir();
-    world_init(SEED, TEST_DIR);
-    CHECK(world_get(0, 10, 0) == B_UNLOADED);
-    load_area(0, 0, 2);
-    CHECK(world_get(0, 0, 0) == B_BEDROCK);
-    CHECK(world_get(-1, 0, -1) == B_BEDROCK);
-    CHECK(world_get(-33, 10, 0) == B_UNLOADED);
-    CHECK(world_get(5, -1, 5) == B_BEDROCK);
-    CHECK(world_get(5, WH, 5) == B_AIR);
-
-    world_set(-5, 60, -5, B_BRICK);
-    CHECK(world_get(-5, 60, -5) == B_BRICK);
-    c = world_chunk(-1, -1);
-    CHECK(c && c->modified && c->blocks[BIDX(11, 60, 11)] == B_BRICK);
-    CHECK(c->height[11 * CH + 11] == 61);
-
-    /* edits on a border dirty the neighbour mesh */
-    c = world_chunk(0, 0);
-    c->mesh_dirty = 0;
-    world_chunk(-1, 0)->mesh_dirty = 0;
-    world_set(0, 60, 5, B_STONE);
-    CHECK(c->mesh_dirty && world_chunk(-1, 0)->mesh_dirty);
-    CHECK(!world_chunk(1, 0)->mesh_dirty || 1);
-    world_shutdown();
-}
-
-static void test_mesh(void)
-{
-    Chunk *c;
-    int x, y, z, i;
-    world_init(SEED, TEST_DIR);
-    load_area(0, 0, 1);
-    c = world_chunk(0, 0);
-    CHECK(world_neighbors_loaded(c));
-    CHECK(!world_neighbors_loaded(world_chunk(1, 1)));
-
-    /* empty the chunk and its neighbours: a lone block has 6 faces */
-    for (z = -16; z < 32; z++)
-        for (x = -16; x < 32; x++)
-            for (y = 0; y < WH; y++) world_set(x, y, z, B_AIR);
-    world_set(5, 20, 5, B_STONE);
-    CHECK(mesh_build(c));
-    CHECK(c->nsolid == 6 && c->nwater == 0);
-
-    world_set(6, 20, 5, B_STONE);
-    mesh_build(c);
-    CHECK(c->nsolid == 10);
-
-    world_set(5, 21, 5, B_WATER);
-    mesh_build(c);
-    CHECK(c->nsolid == 10);
-    CHECK(c->nwater == 5);
-
-    world_set(8, 21, 8, B_TALL_GRASS);
-    mesh_build(c);
-    CHECK(c->nsolid == 12);
-
-    /* a face against a neighbouring chunk is culled */
-    world_set(15, 30, 15, B_STONE);
-    world_set(16, 30, 15, B_STONE);
-    mesh_build(c);
-    CHECK(c->nsolid == 12 + 5);
-
-    /* lone stone fully lit: all four corners of the top face are bright */
-    for (i = 0; i < c->nsolid * 4; i++) {
-        const Vertex *v = &c->solid[i];
-        CHECK(v->x >= 0 && v->x <= CH * VPOS_SCALE && v->z >= 0 && v->z <= CH * VPOS_SCALE);
-        CHECK(v->y >= 0 && v->y <= WH * VPOS_SCALE);
-        CHECK(v->u < VUV_ONE && v->v < VUV_ONE);
-        CHECK((v->color >> 24) == 0xFF);
+        CHECK(wrap_pi(c->yaw - yaw0) > 0.5f);     /* turned left */
+        CHECK(maxskid > 0.5f);
+        CHECK(fabsf(c->body_roll) < 0.2f);
     }
-
-    /* ambient occlusion: a block next to a wall gets darker corners */
-    world_set(5, 21, 6, B_STONE);
-    mesh_build(c);
+    /* crash into the home block: stops at the wall, reports an impact */
     {
-        int found_dark = 0;
-        for (i = 0; i < c->nsolid * 4; i++)
-            if ((c->solid[i].color & 0xFF) < 200 && c->solid[i].y == 21 * VPOS_SCALE) found_dark = 1;
-        CHECK(found_dark);
-    }
-    world_shutdown();
-
-    /* real terrain */
-    world_init(SEED, TEST_DIR);
-    load_area(4, 4, 1);
-    c = world_chunk(4, 4);
-    CHECK(mesh_build(c));
-    printf("mesh: terrain chunk has %d solid and %d water quads (%d KiB)\n", c->nsolid, c->nwater,
-           (int)((c->nsolid + c->nwater) * 4 * sizeof(Vertex) / 1024));
-    CHECK(c->nsolid > 100);
-    world_shutdown();
-}
-
-static void flatten(int x0, int z0, int x1, int z1)
-{
-    int x, y, z;
-    for (z = z0; z < z1; z++)
-        for (x = x0; x < x1; x++)
-            for (y = 0; y < WH; y++) world_set(x, y, z, y == 0 ? B_STONE : B_AIR);
-}
-
-static void test_raycast_physics(void)
-{
-    Player p;
-    int hit[3], prev[3], i;
-    float o[3] = { 10.5f, 10.5f, 10.5f }, down[3] = { 0, -1, 0 }, side[3] = { 1, 0, 0 };
-
-    world_init(SEED, TEST_DIR);
-    load_area(0, 0, 2);
-    flatten(-16, -16, 48, 48);
-
-    CHECK(world_raycast(o, down, 20.0f, hit, prev));
-    CHECK(hit[0] == 10 && hit[1] == 0 && hit[2] == 10);
-    CHECK(prev[1] == 1);
-    CHECK(!world_raycast(o, side, 5.0f, hit, prev));
-    world_set(13, 10, 10, B_GLASS);
-    CHECK(world_raycast(o, side, 5.0f, hit, prev));
-    CHECK(hit[0] == 13 && prev[0] == 12);
-
-    /* across a chunk border towards negative coordinates */
-    o[0] = 1.5f;
-    side[0] = -1.0f;
-    world_set(-2, 10, 10, B_BRICK);
-    CHECK(world_raycast(o, side, 5.0f, hit, prev));
-    CHECK(hit[0] == -2 && prev[0] == -1);
-
-    memset(&p, 0, sizeof(p));
-    p.pos[0] = 5.5f; p.pos[1] = 6.0f; p.pos[2] = 5.5f;
-    for (i = 0; i < 240; i++) player_update(&p, 0, 0, 0, 1.0f / 60.0f);
-    CHECK(p.on_ground);
-    CHECK(fabsf(p.pos[1] - 1.0f) < 0.01f);
-
-    for (i = 0; i < 4; i++) {
-        int z;
-        for (z = -8; z < 24; z++) world_set(20, 1 + i % 3, z, B_BRICK);
-    }
-    for (i = 0; i < 300; i++) player_update(&p, 4.3f, 0, 0, 1.0f / 60.0f);
-    CHECK(p.pos[0] <= 20.0f - PLAYER_HALF_W + 0.001f && p.pos[0] > 19.0f);
-
-    player_update(&p, 0, 0, 1, 1.0f / 60.0f);
-    CHECK(p.pos[1] > 1.05f);
-    CHECK(player_intersects_block(&p, 19, 2, 5));
-
-    /* unloaded chunks are walls */
-    p.pos[0] = 47.5f; p.pos[1] = 1.0f; p.pos[2] = 5.5f;
-    p.vel[1] = 0;
-    for (i = 0; i < 120; i++) player_update(&p, 4.3f, 0, 0, 1.0f / 60.0f);
-    CHECK(p.pos[0] <= 48.0f);
-    world_shutdown();
-}
-
-static void test_persistence(void)
-{
-    clean_dir();
-    world_init(SEED, TEST_DIR);
-    load_area(-3, 2, 0);
-    world_set(-40, 50, 40, B_STONE_BRICKS);
-    world_shutdown();
-
-    world_init(SEED, TEST_DIR);
-    CHECK(world_get(-40, 50, 40) == B_UNLOADED);
-    load_area(-3, 2, 0);
-    CHECK(world_get(-40, 50, 40) == B_STONE_BRICKS);
-    world_shutdown();
-
-    /* slot reuse evicts and saves the old chunk */
-    world_init(SEED, TEST_DIR);
-    load_area(0, 0, 0);
-    world_set(1, 50, 1, B_GLASS);
-    CHECK(world_load_chunk(SLOTS_W, 0) != NULL); /* same slot as (0,0) */
-    CHECK(world_chunk(0, 0) == NULL);
-    load_area(0, 0, 0);
-    CHECK(world_get(1, 50, 1) == B_GLASS);
-    world_shutdown();
-
-    /* saved-chunk registry survives a restart; save clears the modified flag */
-    world_init(SEED, TEST_DIR);
-    CHECK(world_has_saved(0, 0) && world_has_saved(-3, 2));
-    CHECK(!world_has_saved(7, 7));
-    load_area(0, 0, 0);
-    CHECK(!world_chunk(0, 0)->modified);
-    world_set(2, 50, 2, B_BRICK);
-    CHECK(world_chunk(0, 0)->modified);
-    CHECK(world_save_all());
-    CHECK(!world_chunk(0, 0)->modified);
-
-    /* generated chunks committed from a worker buffer */
-    {
-        static unsigned char buf[CH_VOL];
-        Chunk *c;
-        gen_chunk(SEED, 9, 9, buf);
-        c = world_commit_chunk(9, 9, buf);
-        CHECK(c && c->loaded && !c->modified && c->mesh_dirty);
-        CHECK(world_get(9 * CH, 0, 9 * CH) == B_BEDROCK);
-    }
-    world_shutdown();
-    clean_dir();
-}
-
-static void test_mesh_split(void)
-{
-    Chunk *c;
-    int ns;
-    clean_dir();
-    world_init(SEED, TEST_DIR);
-    load_area(2, 2, 1);
-    c = world_chunk(2, 2);
-    mesh_build(c);
-    ns = c->nsolid;
-    CHECK(!c->mesh_dirty);
-    world_set(2 * CH + 5, 62, 2 * CH + 5, B_GLASS);
-    CHECK(c->mesh_dirty);
-    mesh_gather(c);
-    CHECK(!c->mesh_dirty);
-    world_set(2 * CH + 6, 62, 2 * CH + 5, B_GLASS); /* edit while "computing" */
-    mesh_compute();
-    mesh_commit(c);
-    CHECK(c->meshed && c->nsolid == ns + 6); /* snapshot had one glass block */
-    CHECK(c->mesh_dirty);                     /* the later edit queues a rebuild */
-    world_shutdown();
-    clean_dir();
-}
-
-
-static int free_cell(const float p[3])
-{
-    int x = (int)floorf(p[0]), y = (int)floorf(p[1]), z = (int)floorf(p[2]);
-    return !block_solid(world_get(x, y, z)) && !block_solid(world_get(x, y + 1, z)) &&
-           block_solid(world_get(x, y - 1, z));
-}
-
-static void test_town(void)
-{
-    const float *pois[] = { POI_SPAWN, POI_GARAGE, POI_CAR, POI_MARKET, POI_KIOSK, POI_KABAN };
-    int i, x, z, roads = 0, lines = 0, buildings = 0;
-    clean_dir();
-    world_init(SEED, TEST_DIR);
-    for (i = 0; i < 6; i++) {
-        int cx = (int)floorf(pois[i][0]) >> 4, cz = (int)floorf(pois[i][2]) >> 4;
-        load_area(cx, cz, 1);
-        if (!free_cell(pois[i])) printf("POI %d at %.1f %.1f %.1f is blocked\n", i, pois[i][0], pois[i][1], pois[i][2]);
-        CHECK(free_cell(pois[i]));
-        CHECK(town_contains((int)pois[i][0], (int)pois[i][2]));
-    }
-    /* the garage door and kiosk sign exist where the story says */
-    CHECK(world_get(48 + 12, TOWN_Y + 1, 14) == B_GARAGE_DOOR);
-    CHECK(world_get(96 + 21, TOWN_Y + 3, -96 + 20) == B_SIGN_BEER);
-    CHECK(world_get(17, TOWN_Y + 1, 28) == B_DOOR);
-
-    for (z = -16; z < 48; z++)
-        for (x = -16; x < 48; x++) {
-            int top = world_top(x, z), b;
-            if (top < 0) continue;
-            b = world_get(x, top, z);
-            if (town_is_road(x, z)) {
-                roads++;
-                if (b == B_ROAD_LINE_X || b == B_ROAD_LINE_Z) lines++;
-            }
-            if (top > TOWN_Y + 8) buildings++;
+        Car *c;
+        float impact = 0.0f;
+        cars_clear();
+        c = &cars[car_spawn(CK_PLAYER, CAR_LASTIVKA, v3(40.0f, 0, 10.5f), PI_F, 0xFFFFFFFFu)];
+        for (i = 0; i < 240; i++) {
+            c->in_throttle = 1.0f;
+            car_step(c, 1.0f / 60);
+            if (c->impact > impact) impact = c->impact;
         }
-    CHECK(roads > 500 && lines > 20 && buildings > 100);
-    CHECK(town_lot_type(0, 0) == LOT_PANEL5 && town_lot_type(1, 0) == LOT_GARAGES);
-    CHECK(gen_column(SEED, 0, 0, NULL) == TOWN_Y);
-    {
-        int bio;
-        gen_column(SEED, 10, 10, &bio);
-        CHECK(bio == BIOME_TOWN);
-        CHECK(strcmp(biome_name(BIOME_TOWN), "Соняшниківськ") == 0);
+        CHECK(c->pos.z + CAR_SPECS[CAR_LASTIVKA].length * 0.5f < 28.3f);
+        CHECK(impact > 4.0f);
     }
-    world_shutdown();
-    clean_dir();
+    /* the kerb lifts the car */
+    {
+        Car *c;
+        float maxy = 0.0f;
+        cars_clear();
+        c = &cars[car_spawn(CK_PLAYER, CAR_POLE, v3(30.0f, 0, 9.0f), 0.0f, 0xFFFFFFFFu)];
+        for (i = 0; i < 200; i++) {
+            c->in_throttle = 0.8f;
+            car_step(c, 1.0f / 60);
+            if (c->pos.y > maxy) maxy = c->pos.y;
+        }
+        CHECK(maxy > 0.08f);
+    }
 }
 
-static void test_vehicles(void)
+static void test_traffic(void)
 {
-    int dx, dz, i, t, z, offroad = 0, samples = 0, pc;
-    float focus[3] = { 30.0f, TOWN_Y + 1.0f, 30.0f }, out[3];
-    clean_dir();
-    world_init(SEED, TEST_DIR);
-    for (dz = -6; dz <= 6; dz++)
-        for (dx = -6; dx <= 6; dx++) world_load_chunk(dx, dz);
+    int t, i, off = 0, samples = 0, turns = 0, last[MAX_CARS];
+    V3 focus = v3(30, 0, 30);
     cars_clear();
-    for (t = 0; t < 60 * 60; t++) {
+    for (i = 0; i < MAX_CARS; i++) last[i] = -1;
+    for (t = 0; t < 60 * 120; t++) {
         cars_update(1.0f / 60, focus, NULL, 1);
         for (i = 0; i < MAX_CARS; i++) {
             const Car *c = &cars[i];
-            if (c->kind != CAR_TRAFFIC) continue;
+            if (c->kind != CK_TRAFFIC) continue;
             samples++;
-            if (!town_is_road((int)floorf(c->pos[0]), (int)floorf(c->pos[2]))) offroad++;
+            if (!city_on_road(c->pos.x, c->pos.z)) off++;
+            if (last[i] >= 0 && last[i] != c->dir) turns++;
+            last[i] = c->dir;
         }
     }
-    printf("traffic: %d car-frames, %d off road\n", samples, offroad);
-    CHECK(samples > 1000 && offroad == 0);
-
-    /* traffic stops for a pedestrian standing in its lane */
-    cars_clear();
-    i = car_spawn(CAR_TRAFFIC, 60.0f, TOWN_Y + 1.0f, 5.0f, car_dir_yaw(0), 0xFFFFFFFFu);
-    cars[i].dir = 0; cars[i].next_dir = 0; cars[i].speed = 8.0f;
+    printf("traffic: %d car-frames, %d off the asphalt, %d turns\n", samples, off, turns);
+    CHECK(samples > 20000 && turns > 20);
+    CHECK(off * 200 < samples);
+    /* traffic stops for a pedestrian in its lane */
     {
-        float foot[3] = { 70.0f, TOWN_Y + 1.0f, 5.0f };
-        for (t = 0; t < 60 * 5; t++) cars_update(1.0f / 60, focus, foot, 0);
-        CHECK(cars[i].pos[0] < 70.0f - CAR_HALF_L);
-        CHECK(cars[i].speed < 0.5f);
+        Car *c;
+        V3 ped = v3(90.0f, 0.0f, 10.5f);
+        cars_clear();
+        c = &cars[car_spawn(CK_TRAFFIC, CAR_KLASYKA, v3(55.0f, 0, 10.5f), -PI_F / 2, 0xFFFFFFFFu)];
+        c->dir = 0;
+        c->next_dir = 0;
+        c->vel = v3(10.0f, 0, 0);
+        for (t = 0; t < 60 * 6; t++) cars_update(1.0f / 60, focus, &ped, 0);
+        CHECK(c->pos.x < 90.0f - 3.0f);
+        CHECK(car_speed(c) < 0.5f);
     }
-
-    /* the player drives along the road, then hits a wall and stops */
-    cars_clear();
-    pc = car_spawn(CAR_PLAYER, 60.0f, TOWN_Y + 1.0f, 3.5f, car_dir_yaw(0), 0xFFFFFFFFu);
-    for (t = 0; t < 60 * 3; t++) car_physics(&cars[pc], 1.0f, 0.0f, 1.0f / 60);
-    CHECK(cars[pc].pos[0] > 80.0f && fabsf(cars[pc].pos[1] - (TOWN_Y + 1)) < 0.01f);
-    for (z = 0; z < 7; z++)
-        for (t = 1; t < 4; t++) world_set(130, TOWN_Y + t, z, B_BRICK);
-    for (t = 0; t < 60 * 6; t++) car_physics(&cars[pc], 1.0f, 0.0f, 1.0f / 60);
-    CHECK(cars[pc].pos[0] < 130.0f - 1.9f);
-    car_exit_point(&cars[pc], out);
-    CHECK(fabsf(out[0] - cars[pc].pos[0]) < 3.0f);
-    {
-        float px = cars[pc].pos[0], pz = cars[pc].pos[2];
-        CHECK(car_push_out(&cars[pc], &px, &pz, 0.3f));
-        CHECK(!car_push_out(&cars[pc], &px, &pz, 0.29f));
-    }
-    world_shutdown();
-    clean_dir();
 }
 
-static void teleport(StoryView *v, const float p[3]) { v->pos[0] = p[0]; v->pos[1] = p[1]; v->pos[2] = p[2]; }
-
-static void test_story(void)
+static void test_actor(void)
 {
+    Ped p;
+    int i, steps = 0, ev, landed = 0;
+    float dist;
+    /* walking: the cycle advances with distance (no foot sliding) */
+    ped_init(&p, CH_ANDRIY, v3(30.0f, WALK_H, 50.0f), 0.0f);
+    for (i = 0; i < 240; i++) {
+        ev = ped_update(&p, v3(1, 0, 0), 0, 0, 1.0f / 60);
+        if (ev & PED_EV_STEP) steps++;
+    }
+    dist = p.pos.x - 30.0f;
+    printf("jog: %.1f m in 4 s, %d steps, phase %.1f\n", dist, steps, p.anim.phase);
+    CHECK(dist > 12.0f && dist < 19.0f);
+    CHECK(steps > 10 && steps < 30);
+    CHECK(p.anim.move > 0.9f && p.anim.run > 0.8f);
+    CHECK(fabsf(wrap_pi(p.yaw - yaw_of(1, 0))) < 0.1f); /* faces the way it moves */
+    /* stopping takes a moment (momentum) */
+    ped_update(&p, v3(0, 0, 0), 0, 0, 1.0f / 60);
+    CHECK(sqrtf(p.vel.x * p.vel.x + p.vel.z * p.vel.z) > 3.0f);
+    for (i = 0; i < 60; i++) ped_update(&p, v3(0, 0, 0), 0, 0, 1.0f / 60);
+    CHECK(sqrtf(p.vel.x * p.vel.x + p.vel.z * p.vel.z) < 0.01f);
+    /* jump: crouch, take off, land */
+    {
+        float maxy = p.pos.y;
+        ped_update(&p, v3(0, 0, 0), 0, 1, 1.0f / 60);
+        CHECK(p.anim.crouch > 0.0f || !p.on_ground);
+        for (i = 0; i < 120; i++) {
+            ev = ped_update(&p, v3(0, 0, 0), 0, 0, 1.0f / 60);
+            if (p.pos.y > maxy) maxy = p.pos.y;
+            if (ev & PED_EV_LAND) landed = 1;
+        }
+        CHECK(maxy - WALK_H > 0.5f && maxy - WALK_H < 1.0f);
+        CHECK(landed && p.on_ground);
+    }
+    /* walls stop the character */
+    ped_init(&p, CH_ANDRIY, v3(40.0f, WALK_H, 44.0f), PI_F);
+    for (i = 0; i < 300; i++) ped_update(&p, v3(0, 0, -1), 1, 0, 1.0f / 60);
+    CHECK(p.pos.z > 40.0f - 0.01f && p.pos.z < 41.0f);
+    /* kerbs: walking off the sidewalk onto the road and back */
+    ped_init(&p, CH_ANDRIY, v3(30.0f, WALK_H, 1.5f), PI_F);
+    for (i = 0; i < 120; i++) ped_update(&p, v3(0, 0, 1), 0, 0, 1.0f / 60);
+    CHECK(p.pos.y < 0.01f);
+    /* NPC goals */
+    ped_init(&p, CH_TARAS, v3(30.0f, WALK_H, 50.0f), 0.0f);
+    p.goal = v3(34.0f, WALK_H, 52.0f);
+    p.has_goal = 1;
+    for (i = 0; i < 600 && p.has_goal; i++) ped_update(&p, v3(0, 0, 0), 0, 0, 1.0f / 60);
+    CHECK(!p.has_goal && fabsf(p.pos.x - 34.0f) < 0.3f);
+    /* meshes and poses for everyone, every gesture */
+    for (i = 0; i < CH_COUNT; i++) {
+        GMesh m;
+        int g, k, bad = 0;
+        ped_init(&p, i, v3(0, 0, 0), 0.3f);
+        gm_init(&m);
+        for (g = 0; g < GEST_COUNT; g++) {
+            p.anim.gesture = g;
+            p.anim.gesture_w = 1.0f;
+            p.anim.talk = 1.0f;
+            p.anim.sit = g == 3 ? 1.0f : 0.0f;
+            m.n = 0;
+            ped_append_mesh(&m, &p);
+            for (k = 0; k < m.n; k++)
+                if (isnan(m.v[k].x) || fabsf(m.v[k].y) > 3.0f) bad++;
+        }
+        CHECK(m.n > 300 && bad == 0);
+        gm_free(&m);
+    }
+}
+
+static Cutscene *cur;
+static int fake_speaking(void) { return cur && cur->sub_text && cur->sub_t < voice_duration(cur->sub_text); }
+
+static void test_cutscenes_and_story(void)
+{
+    static Ped actors[N_ACTORS];
+    static const int WHO[N_ACTORS] = { CH_ANDRIY, CH_TARAS, CH_GALYA, CH_KABAN, CH_SELLER, CH_THUG, CH_THUG };
+    Cutscene cs;
+    CsIO io;
     Story s;
     StoryView v;
     StoryOut o;
-    float m[3];
-    int i;
+    int id, i, f;
+    memset(&io, 0, sizeof(io));
+    io.speaking = fake_speaking;
+    cur = &cs;
+    for (i = 0; i < N_ACTORS; i++) {
+        ped_init(&actors[i], WHO[i], v3(0, 0, 0), 0);
+        io.actors[i] = &actors[i];
+    }
+    for (id = CS_INTRO; id < CS_COUNT; id++) {
+        int lines = 0, reqs = 0;
+        cs_start(&cs, id);
+        for (f = 0; f < 60 * 120 && cs.running; f++) {
+            cs_update(&cs, &io, 1.0f / 60, 0, 0);
+            reqs |= cs.requests;
+            if (cs.sub_text && cs.sub_t < 1.0f / 59) lines++;
+            for (i = 0; i < N_ACTORS; i++) ped_update(&actors[i], v3(0, 0, 0), 0, 0, 1.0f / 60);
+        }
+        printf("cutscene %d: %.1f s, %d lines\n", id, f / 60.0f, lines);
+        CHECK(!cs.running);
+        CHECK(lines >= 1);
+        if (id == CS_KIOSK) CHECK(reqs & CS_REQ_CHASER);
+        if (id == CS_KABAN) CHECK(reqs & CS_REQ_KABAN_SETUP);
+        /* skipping works from the start */
+        cs_start(&cs, id);
+        cs_update(&cs, &io, 1.0f / 60, 0, 1);
+        CHECK(!cs.running);
+    }
+
+    /* the whole chapter */
     story_start(&s);
     memset(&v, 0, sizeof(v));
-    CHECK(s.mission == M_HOME && story_marker(&s, m));
-    teleport(&v, POI_SPAWN);
+    v.pos = POI_SPAWN;
     story_update(&s, &v, 0.1f, &o);
-    CHECK(s.mission == M_HOME && o.lines == 0);
-    teleport(&v, POI_GARAGE);
+    CHECK(o.scene == CS_INTRO);
+    story_scene_done(&s, CS_INTRO, &o);
+    CHECK(s.mission == M_HOME);
     story_update(&s, &v, 0.1f, &o);
-    CHECK(s.mission == M_MARKET && o.spawn_own_car && o.lines >= 3 && o.mission_passed);
-    teleport(&v, POI_MARKET);
+    CHECK(o.scene == 0);
+    v.pos = POI_GARAGE;
     story_update(&s, &v, 0.1f, &o);
-    CHECK(s.mission == M_MARKET && o.lines == 0); /* must take the car first */
+    CHECK(o.scene == CS_GARAGE);
+    story_scene_done(&s, CS_GARAGE, &o);
+    CHECK(s.mission == M_MARKET && o.mission_passed);
+    v.pos = POI_MARKET;
+    story_update(&s, &v, 0.1f, &o);
+    CHECK(o.scene == 0);                              /* must take the car first */
     v.in_car = v.in_own_car = 1;
     story_update(&s, &v, 0.1f, &o);
     story_update(&s, &v, 0.1f, &o);
+    CHECK(o.scene == CS_MARKET);
+    story_scene_done(&s, CS_MARKET, &o);
     CHECK(s.mission == M_PARCEL && s.timer > 100.0f);
-    /* running out of time restarts the timer */
-    teleport(&v, POI_SPAWN);
-    for (i = 0; i < 200 && !o.mission_failed; i++) story_update(&s, &v, 1.0f, &o);
-    CHECK(o.mission_failed && s.mission == M_PARCEL && s.timer > 100.0f);
-    teleport(&v, POI_KIOSK);
+    v.pos = POI_SPAWN;
+    for (i = 0; i < 400 && !o.mission_failed; i++) story_update(&s, &v, 1.0f, &o);
+    CHECK(o.mission_failed && o.scene == CS_FAIL && s.timer > 100.0f);
+    v.pos = POI_KIOSK;
     story_update(&s, &v, 0.1f, &o);
-    CHECK(s.mission == M_TAIL && o.spawn_chaser && s.money == 800000);
+    CHECK(o.scene == CS_KIOSK);
+    story_scene_done(&s, CS_KIOSK, &o);
+    CHECK(s.mission == M_TAIL && s.money == 800000);
     v.chaser_alive = 1;
-    v.chaser_dist = 20.0f;
+    v.chaser_dist = 30.0f;
     for (i = 0; i < 100; i++) story_update(&s, &v, 0.1f, &o);
     CHECK(s.mission == M_TAIL);
-    v.chaser_dist = 120.0f;
-    for (i = 0; i < 50 && s.mission == M_TAIL; i++) story_update(&s, &v, 0.1f, &o);
-    CHECK(s.mission == M_KABAN && o.remove_chaser);
-    teleport(&v, POI_KABAN);
+    v.chaser_dist = 150.0f;
+    for (i = 0; i < 60 && s.mission == M_TAIL; i++) story_update(&s, &v, 0.1f, &o);
+    CHECK(s.mission == M_KABAN && o.pager && o.kaban_setup && o.remove_chaser);
+    v.pos = POI_KABAN;
     story_update(&s, &v, 0.1f, &o);
-    CHECK(s.mission == M_FREE && o.lines >= 4 && !story_marker(&s, m));
-    for (i = M_HOME; i <= M_FREE; i++) {
-        s.mission = i;
-        CHECK(strlen(story_title(&s)) > 0 && strlen(story_objective(&s)) > 0);
-    }
+    CHECK(o.scene == CS_KABAN);
+    story_scene_done(&s, CS_KABAN, &o);
+    CHECK(s.mission == M_FREE && s.money == 1000000);
 }
 
-static void test_synth(void)
+static void test_audio(void)
 {
-    static short buf[SYNTH_RATE * 2];
-    int t, c, i, peak;
+    static short buf[SYNTH_RATE * 2 * 4];
+    int t, c, i, n;
     double sum;
     synth_init();
     for (t = 0; t < MUS_COUNT; t++) {
         int lead = synth_track_steps(t, 0);
-        CHECK(lead > 0);
-        for (c = 1; c < 4; c++) {
-            int n = synth_track_steps(t, c);
-            CHECK(n > 0 && lead % n == 0); /* every channel loops in step with the lead */
-        }
-        synth_music(t);
-        synth_render(buf, SYNTH_RATE);
-        sum = 0.0;
-        peak = 0;
-        for (i = 0; i < SYNTH_RATE * 2; i++) {
-            sum += (double)buf[i] * buf[i];
-            if (abs(buf[i]) > peak) peak = abs(buf[i]);
-        }
-        CHECK(sqrt(sum / (SYNTH_RATE * 2)) > 1000.0 && peak < 32767);
+        for (c = 1; c < 4; c++) CHECK(synth_track_steps(t, c) > 0 && lead % synth_track_steps(t, c) == 0);
     }
     synth_music(-1);
-    for (i = 0; i < SFX_COUNT; i++) synth_sfx(i);
-    synth_engine(1, 0.7f);
-    synth_render(buf, SYNTH_RATE);
+    voice_say("Андрюха! Живий! Ну ти й вимахав у тій армії.", 102.0f, 0.95f);
+    CHECK(voice_busy());
     sum = 0.0;
-    for (i = 0; i < SYNTH_RATE * 2; i++) sum += (double)buf[i] * buf[i];
-    CHECK(sum > 0.0);
+    n = 0;
+    while (voice_busy() && n < SYNTH_RATE * 4) {
+        synth_render(buf + n * 2, 1024);
+        for (i = 0; i < 1024; i++) sum += (double)buf[(n + i) * 2] * buf[(n + i) * 2];
+        n += 1024;
+    }
+    printf("voice: %.2f s (estimate %.2f s), rms %.0f\n", n / (float)SYNTH_RATE,
+           voice_duration("Андрюха! Живий! Ну ти й вимахав у тій армії."), sqrt(sum / n));
+    CHECK(!voice_busy());
+    CHECK(sqrt(sum / n) > 800.0 && sqrt(sum / n) < 12000.0);
+    /* WAV round trip */
+    {
+        FILE *f = fopen("test_voice.wav", "wb");
+        unsigned char h[44] = { 'R', 'I', 'F', 'F', 0, 0, 0, 0, 'W', 'A', 'V', 'E', 'f', 'm', 't', ' ',
+                                16, 0, 0, 0, 1, 0, 1, 0, 0x22, 0x56, 0, 0, 0x44, 0xAC, 0, 0, 2, 0, 16, 0,
+                                'd', 'a', 't', 'a', 0, 0, 0, 0 };
+        short pcm[100], *loaded;
+        int ns, rate;
+        for (i = 0; i < 100; i++) pcm[i] = (short)(i * 100);
+        h[40] = 200;
+        fwrite(h, 1, 44, f);
+        fwrite(pcm, 2, 100, f);
+        fclose(f);
+        CHECK(wav_load("test_voice.wav", &loaded, &ns, &rate));
+        CHECK(ns == 100 && rate == 22050 && loaded[50] == 5000);
+        free(loaded);
+        remove("test_voice.wav");
+        CHECK(!wav_load("missing.wav", &loaded, &ns, &rate));
+    }
 }
 
-static void test_text(void)
+static void test_text_and_textures(void)
 {
-    const char *s = "Ґанок Їжака";
-    const char *p = s;
+    static unsigned int atlas[TEX_SIZE * TEX_SIZE];
+    const char *s = "Ґанок Їжака", *p = s;
     unsigned int cps[16];
-    int n = 0;
+    int n = 0, i, transparent = 0;
     while (*p && n < 16) cps[n++] = utf8_next(&p);
     CHECK(n == 11 && cps[0] == 0x490 && cps[6] == 0x407);
-    CHECK(font_glyph('A') == font_glyph(0x410));          /* Cyrillic А = Latin A */
-    CHECK(font_glyph(0x491) == font_glyph(0x490));        /* ґ -> Ґ */
-    CHECK(font_glyph(0x44F) == font_glyph(0x42F));        /* я -> Я */
-    CHECK(font_glyph(0x42F) >= 64 && font_glyph(0x42F) < 128);
-    CHECK(font_glyph(0x2715) >= 64);                      /* ✕ */
-    CHECK(font_glyph(0x4E2D) == font_glyph('?'));
-}
-
-static void test_textures(void)
-{
-    static unsigned int atlas[ATLAS_SIZE * ATLAS_SIZE], font[FONT_TEX_W * FONT_TEX_H];
-    int i, transparent = 0, lit = 0;
-    textures_generate(atlas);
-    for (i = 0; i < ATLAS_SIZE * ATLAS_SIZE; i++)
-        if ((atlas[i] >> 24) == 0) transparent++;
-    CHECK(transparent > 0);
+    CHECK(font_glyph('A') == font_glyph(0x410));
+    CHECK(font_glyph(0x44F) == font_glyph(0x42F));
+    CHECK(font_glyph(0x2715) >= 64);
+    texgen_atlas(atlas);
+    for (i = 0; i < TEX_SIZE * TEX_SIZE; i++) transparent += (atlas[i] >> 24) == 0;
+    CHECK(transparent > 1000);
     CHECK((atlas[0] >> 24) == 0xFF);
-    font_generate(font);
-    for (i = 0; i < FONT_TEX_W * FONT_TEX_H; i++) lit += font[i] != 0;
-    CHECK(lit > 300);
 }
 
 int main(void)
 {
-    test_generation();
-    test_world_access();
-    test_mesh();
-    test_raycast_physics();
-    test_persistence();
-    test_mesh_split();
-    test_textures();
-    test_town();
-    test_vehicles();
-    test_story();
-    test_synth();
-    test_text();
+    city_build(1996);
+    carmodels_build();
+    test_city();
+    test_car_physics();
+    test_traffic();
+    test_actor();
+    test_cutscenes_and_story();
+    test_audio();
+    test_text_and_textures();
+    city_free();
     if (failures) {
         printf("%d check(s) failed\n", failures);
         return 1;

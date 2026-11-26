@@ -1,78 +1,65 @@
-/* UkraineCraft: shared game state between the main loop and the HUD. */
+/* UkraineCraft: state shared between the main loop and the HUD. */
 #ifndef UC_GAME_H
 #define UC_GAME_H
 
+#include "mathx.h"
 #include "story.h"
-#include "world.h"
 
 #define GAME_TITLE "UkraineCraft"
-#define WORLD_DIR "ukrainecraft_world"
-#define LEVEL_FILE WORLD_DIR "/level.dat"
-#define HOTBAR_N 9
+#define SAVE_DIR "ukrainecraft_save"
+#define LEVEL_FILE SAVE_DIR "/level.dat"
+#define VOICE_DIR "voice"
 #define RADIO_STATIONS 3
 
 typedef struct {
     char magic[8];
-    unsigned int seed;
-    float pos[3];
-    float yaw, pitch;
-    float time;          /* 0..1, 0 = sunrise, 0.25 = noon */
-    int flying;
-    int hotbar[HOTBAR_N];
-    int sel;
-    int radius;
-    int look_speed;      /* 1..5 */
+    V3 pos;
+    float yaw, cam_yaw;
+    float time;           /* 0..1, 0 = sunrise, 0.25 = noon */
+    int radius;           /* view distance in 64 m cells, 2..6 */
+    int look_speed;       /* 1..5 */
     int day_cycle;
     int show_info;
-    int music_vol;       /* 0..10 */
-    int sfx_vol;         /* 0..10 */
-    int third_person;
-    int radio;           /* station index */
+    int music_vol, sfx_vol, voice_vol; /* 0..10 */
+    int first_person;
+    int radio;
     Story story;
-    int has_car;         /* the family car exists */
-    float car_pos[3];
+    int has_car;
+    V3 car_pos;
     float car_yaw;
+    int kaban_setup;
 } Level;
 
-/* What the HUD needs to know about the current frame. */
 typedef struct {
     float fps;
-    int has_hit, hit_block;
-    int crosshair;
-    int hotbar;
-    int near_car;
     int in_car;
-    int can_exit;
-    float speed_kmh;
+    float speed_kmh, rpm;
+    int gear;
     const char *radio_text;
     float radio_timer;
-    const char *banner;
-    const char *banner_sub;
+    const char *banner, *banner_sub;
     float banner_timer;
     int marker;
-    float marker_angle;  /* radians relative to the view direction */
-    float marker_dist;
-    float name_timer;
-    int underwater;
-    const char *biome;
+    float marker_angle, marker_dist;
+    const char *hint;
+    int crosshair;
     int px, py, pz;
+    const char *area;
 } HudInfo;
 
-enum { SET_RADIUS, SET_LOOK, SET_MUSIC, SET_SFX, SET_CYCLE, SET_TIME, SET_INFO, SET_BACK, SET_COUNT };
-enum { PAUSE_RESUME, PAUSE_BLOCKS, PAUSE_SETTINGS, PAUSE_QUIT, PAUSE_COUNT };
+enum { SET_RADIUS, SET_LOOK, SET_MUSIC, SET_SFX, SET_VOICE, SET_CYCLE, SET_TIME, SET_INFO, SET_BACK, SET_COUNT };
+enum { PAUSE_RESUME, PAUSE_SETTINGS, PAUSE_QUIT, PAUSE_COUNT };
 enum { MENU_CONTINUE, MENU_NEW, MENU_SETTINGS, MENU_EXIT, MENU_COUNT };
 
-#define INV_COLS 9
-
 void hud_splash(float t);
-void hud_main_menu(int sel, int has_save, float t);
+void hud_main_menu(int sel, int has_save);
 void hud_confirm(const char *question, const char *yes, const char *no);
 void hud_settings(int sel, const Level *L);
 void hud_pause(int sel);
-void hud_inventory(int cursor, const Level *L);
-void hud_intro(int slide, float t);
-void hud_dialog(const char *speaker, const char *text, float t);
+void hud_loading(float progress, const char *what);
 void hud_play(const Level *L, const HudInfo *h);
-void hud_loading(int done, int total, const char *what);
+/* cutscene: letterbox, subtitles, title, fade */
+void hud_cutscene(const char *who, const char *text, float sub_t, float letterbox,
+                  const char *title, const char *title2, float title_t, float fade);
 
 #endif

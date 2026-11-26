@@ -1,5 +1,5 @@
 TARGET = ukrainecraft
-OBJS = src/main.o src/render.o src/hud.o src/audio.o src/synth.o src/story.o src/vehicle.o src/town.o src/world.o src/gen.o src/mesh.o src/textures.o
+OBJS = src/main.o src/render.o src/hud.o src/audio.o src/synth.o src/voice.o src/story.o src/cutscene.o src/actor.o src/car.o src/carmodel.o src/city.o src/gfx.o src/texgen.o
 
 CFLAGS = -O2 -G0 -Wall -Wextra
 CXXFLAGS = $(CFLAGS) -fno-exceptions -fno-rtti

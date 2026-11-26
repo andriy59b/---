@@ -5,3 +5,6 @@
 EBOOT.PBP
 psp/tests/host_test
 world.dat
+psp/tools/preview
+psp/tools/*.png
+psp/tests/host_test

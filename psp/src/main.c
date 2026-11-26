@@ -1,6 +1,6 @@
-/* UkraineCraft — an original open-world voxel game for the PSP set in 1996.
- * Main loop: modes (splash, menus, intro, play, dialogue), input, cameras,
- * chunk streaming on a worker thread, saving. */
+/* UkraineCraft — an original open-world game for the PSP set in 1996.
+ * Main loop: modes, input, third-person camera, getting in and out of cars,
+ * story and cutscenes, radio, saving. */
 #include <pspkernel.h>
 #include <pspctrl.h>
 #include <psppower.h>
@@ -9,54 +9,53 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
+#include "actor.h"
 #include "audio.h"
+#include "car.h"
+#include "city.h"
+#include "cutscene.h"
 #include "game.h"
-#include "gen.h"
-#include "mesh.h"
 #include "render.h"
 #include "story.h"
 #include "synth.h"
-#include "town.h"
-#include "vehicle.h"
-#include "world.h"
+#include "voice.h"
 
-PSP_MODULE_INFO("UkraineCraft", 0, 1, 1);
+PSP_MODULE_INFO("UkraineCraft", 0, 1, 2);
 PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER | THREAD_ATTR_VFPU);
 PSP_HEAP_SIZE_KB(-1024);
 
-#define DAY_LENGTH 720.0f
-#define AUTOSAVE_EVERY 180.0f
-#define REACH 5.0f
-#define PI 3.14159265f
-#define FAMILY_CAR_COLOR 0xFFA8C8DCu
-#define CHASER_COLOR 0xFF141414u
+#define DAY_LENGTH 900.0f
+#define AUTOSAVE_EVERY 120.0f
+#define FAMILY_CAR_PAINT 0xFF3A2A9Au
+#define KABAN_CAR_PAINT 0xFF181818u
+#define FOV 62.0f
+#define MAX_EXTRAS 4
 
-enum {
-    MODE_SPLASH, MODE_MENU, MODE_CONFIRM, MODE_SETTINGS, MODE_LOADING,
-    MODE_INTRO, MODE_PLAY, MODE_PAUSE, MODE_INVENTORY, MODE_DIALOG
-};
+enum { MODE_SPLASH, MODE_MENU, MODE_CONFIRM, MODE_SETTINGS, MODE_PLAY, MODE_PAUSE, MODE_CUTSCENE };
+enum { P_FOOT, P_ENTER_WALK, P_ENTER_OPEN, P_ENTER_IN, P_ENTER_CLOSE, P_DRIVE, P_EXIT_OPEN, P_EXIT_CLOSE };
 
-static const char LEVEL_MAGIC[8] = { 'U', 'K', 'R', 'C', 'R', '0', '0', '1' };
+static const char LEVEL_MAGIC[8] = { 'U', 'K', 'R', 'C', 'R', '0', '0', '2' };
 
 static Level L;
-static Player player;
+static Ped peds[N_ACTORS];
+static Ped extras[MAX_EXTRAS];
+static float extra_t[MAX_EXTRAS];
+static Ped *player = &peds[A_ANDRIY];
 static volatile int running = 1;
 
-static int mode = MODE_SPLASH, settings_return = MODE_MENU, loading_next = MODE_PLAY;
-static int has_save, in_game;
+static int mode = MODE_SPLASH, settings_return = MODE_MENU, has_save, in_game;
 static float mode_time;
-
-static int car_idx = -1;
-static float cam_yaw, body_yaw;
-
-#define DLG_MAX 32
-static const char *dlg_speaker[DLG_MAX], *dlg_text[DLG_MAX];
-static int dlg_n, dlg_i;
+static int pstate = P_FOOT, car_idx = -1;
+static float pstate_t;
+static float cam_yaw, cam_pitch = -0.12f;
+static Cutscene cs;
+static float letterbox;
 
 static const char *banner, *banner_sub;
 static float banner_t;
-static char banner_buf[96];
+static char banner_buf[160];
 
 static const char *const STATION_NAMES[RADIO_STATIONS] = {
     "Радіо Соняшник FM 103.5", "Шансон-хвиля 88.2", "Радіо вимкнено",
@@ -68,9 +67,9 @@ static int radio_track_i;
 static float radio_timer;
 static char radio_buf[96];
 
-typedef struct { signed char dx, dz; short d2; } Offset;
-static Offset offsets[(2 * (MAX_RADIUS + 1) + 1) * (2 * (MAX_RADIUS + 1) + 1)];
-static int n_offsets;
+static GMesh dyn;
+static short *voice_bufs[2];
+static int voice_buf_i;
 
 /* ------------------------------------------------------------- callbacks */
 
@@ -100,14 +99,6 @@ static void setup_callbacks(void)
 /* ---------------------------------------------------------------- helpers */
 
 static unsigned int now_us(void) { return sceKernelGetSystemTimeLow(); }
-static float clampf(float v, float a, float b) { return v < a ? a : (v > b ? b : v); }
-
-static float wrapf(float a)
-{
-    while (a > PI) a -= 2 * PI;
-    while (a < -PI) a += 2 * PI;
-    return a;
-}
 
 static unsigned int rgb(int r, int g, int b)
 {
@@ -133,295 +124,59 @@ static float analog(unsigned char v)
     return clampf(f, -1.0f, 1.0f);
 }
 
-static void show_banner(const char *text, const char *sub)
+static void show_banner(const char *text, const char *sub, float t)
 {
     snprintf(banner_buf, sizeof(banner_buf), "%s", text);
     banner = banner_buf;
     banner_sub = sub;
-    banner_t = 3.0f;
+    banner_t = t;
 }
 
 static void apply_volumes(void)
 {
     synth_volumes(L.music_vol / 10.0f, L.sfx_vol / 10.0f);
+    voice_volume(L.voice_vol / 10.0f);
 }
 
-/* ------------------------------------------------------------ worker thread */
+/* ------------------------------------------------------------------ voices */
 
-enum { JOB_IDLE = 0, JOB_BUSY, JOB_DONE };
-enum { JOB_GEN = 1, JOB_MESH };
-
-static volatile int job_state = JOB_IDLE;
-static int job_type, job_cx, job_cz;
-static unsigned int job_seed;
-static unsigned char job_blocks[CH_VOL];
-static SceUID job_sema = -1;
-
-static int worker_thread(SceSize args, void *argp)
+static void cs_say(int actor, const char *text, const char *id)
 {
-    (void)args; (void)argp;
-    for (;;) {
-        sceKernelWaitSema(job_sema, 1, NULL);
-        if (job_type == JOB_GEN) gen_chunk(job_seed, job_cx, job_cz, job_blocks);
-        else mesh_compute();
-        job_state = JOB_DONE;
+    char path[96];
+    short *buf = NULL;
+    int n = 0, rate = 0, who;
+    if (actor < 0 || !text) {
+        voice_stop();
+        return;
     }
-    return 0;
-}
-
-static void start_worker(void)
-{
-    SceUID th;
-    job_sema = sceKernelCreateSema("uc_job", 0, 0, 1, NULL);
-    th = sceKernelCreateThread("uc_worker", worker_thread, 0x30, 0x10000, PSP_THREAD_ATTR_USER, NULL);
-    if (th >= 0) sceKernelStartThread(th, 0, NULL);
-}
-
-static void post_job(int type, int cx, int cz)
-{
-    job_type = type;
-    job_cx = cx;
-    job_cz = cz;
-    job_seed = L.seed;
-    job_state = JOB_BUSY;
-    sceKernelSignalSema(job_sema, 1);
-}
-
-static void worker_drain(void)
-{
-    while (job_state == JOB_BUSY) sceKernelDelayThread(1000);
-    job_state = JOB_IDLE;
-}
-
-static int cmp_offset(const void *a, const void *b)
-{
-    return ((const Offset *)a)->d2 - ((const Offset *)b)->d2;
-}
-
-static void build_offsets(void)
-{
-    int dx, dz, r = MAX_RADIUS + 1;
-    n_offsets = 0;
-    for (dz = -r; dz <= r; dz++)
-        for (dx = -r; dx <= r; dx++) {
-            offsets[n_offsets].dx = (signed char)dx;
-            offsets[n_offsets].dz = (signed char)dz;
-            offsets[n_offsets].d2 = (short)(dx * dx + dz * dz);
-            n_offsets++;
-        }
-    qsort(offsets, (size_t)n_offsets, sizeof(Offset), cmp_offset);
-}
-
-static int cheb(const Offset *o) { return abs(o->dx) > abs(o->dz) ? abs(o->dx) : abs(o->dz); }
-
-static void stream_chunks(int pcx, int pcz, int radius)
-{
-    int i, loads = 0;
-
-    if (job_state == JOB_DONE) {
-        if (job_type == JOB_GEN) {
-            if (abs(job_cx - pcx) <= radius + 2 && abs(job_cz - pcz) <= radius + 2 &&
-                !world_commit_chunk(job_cx, job_cz, job_blocks) && L.radius > 2)
-                L.radius--;
-        } else {
-            Chunk *c = world_chunk(job_cx, job_cz);
-            if (c) {
-                mesh_commit(c);
-                r_flush_cache();
-            }
-        }
-        job_state = JOB_IDLE;
-    }
-
-    if (job_state == JOB_IDLE) {
-        for (i = 0; i < n_offsets; i++) {
-            Chunk *c;
-            if (cheb(&offsets[i]) > radius) continue;
-            c = world_chunk(pcx + offsets[i].dx, pcz + offsets[i].dz);
-            if (!c || !c->mesh_dirty || !world_neighbors_loaded(c)) continue;
-            mesh_gather(c);
-            post_job(JOB_MESH, c->cx, c->cz);
-            break;
-        }
-    }
-
-    for (i = 0; i < n_offsets && loads < 2; i++) {
-        int cx = pcx + offsets[i].dx, cz = pcz + offsets[i].dz;
-        if (cheb(&offsets[i]) > radius + 1) continue;
-        if (world_chunk(cx, cz)) continue;
-        if (job_state != JOB_IDLE && job_type == JOB_GEN && job_cx == cx && job_cz == cz) continue;
-        if (world_has_saved(cx, cz) && world_load_saved(cx, cz)) {
-            loads++;
-            continue;
-        }
-        if (job_state == JOB_IDLE) post_job(JOB_GEN, cx, cz);
-        break;
-    }
-
-    world_free_far_meshes(pcx, pcz, radius + 1);
-}
-
-static int area_progress(int pcx, int pcz, int radius, int *total)
-{
-    int dx, dz, done = 0;
-    *total = (2 * radius + 1) * (2 * radius + 1);
-    for (dz = -radius; dz <= radius; dz++)
-        for (dx = -radius; dx <= radius; dx++) {
-            Chunk *c = world_chunk(pcx + dx, pcz + dz);
-            if (c && c->meshed) done++;
-        }
-    return done;
-}
-
-/* ------------------------------------------------------------------ level */
-
-static void level_defaults(void)
-{
-    static const int HOTBAR_DEFAULT[HOTBAR_N] = {
-        B_PANEL, B_PANEL_WINDOW, B_BRICK, B_PLASTER, B_ROOF, B_PLANKS, B_GLASS, B_ASPHALT, B_SUNFLOWER,
-    };
-    memset(&L, 0, sizeof(L));
-    memcpy(L.magic, LEVEL_MAGIC, sizeof(LEVEL_MAGIC));
-    L.seed = now_us() ^ 0x1996u;
-    L.time = 0.08f;
-    memcpy(L.hotbar, HOTBAR_DEFAULT, sizeof(HOTBAR_DEFAULT));
-    L.radius = 5;
-    L.look_speed = 3;
-    L.day_cycle = 1;
-    L.music_vol = 7;
-    L.sfx_vol = 9;
-    L.third_person = 0;
-    story_start(&L.story);
-    memcpy(L.pos, POI_SPAWN, sizeof(L.pos));
-    L.yaw = POI_SPAWN_YAW;
-}
-
-static int level_load(void)
-{
-    FILE *f = fopen(LEVEL_FILE, "rb");
-    int ok;
-    if (!f) return 0;
-    ok = fread(&L, 1, sizeof(L), f) == sizeof(L) && memcmp(L.magic, LEVEL_MAGIC, sizeof(LEVEL_MAGIC)) == 0;
-    fclose(f);
-    if (ok) {
-        if (L.radius < 2 || L.radius > MAX_RADIUS) L.radius = 5;
-        if (L.look_speed < 1 || L.look_speed > 5) L.look_speed = 3;
-        if (L.sel < 0 || L.sel >= HOTBAR_N) L.sel = 0;
-        if (L.radio < 0 || L.radio >= RADIO_STATIONS) L.radio = 0;
-        if (L.music_vol < 0 || L.music_vol > 10) L.music_vol = 7;
-        if (L.sfx_vol < 0 || L.sfx_vol > 10) L.sfx_vol = 9;
-    }
-    return ok;
-}
-
-static void level_save(void)
-{
-    FILE *f;
-    int own = -1, i;
-    if (car_idx >= 0) {
-        car_exit_point(&cars[car_idx], L.pos);
+    who = peds[actor].who;
+    snprintf(path, sizeof(path), VOICE_DIR "/%s.wav", id ? id : "none");
+    /* the buffer from two lines ago is certainly no longer playing */
+    voice_buf_i ^= 1;
+    free(voice_bufs[voice_buf_i]);
+    voice_bufs[voice_buf_i] = NULL;
+    if (wav_load(path, &buf, &n, &rate)) {
+        voice_bufs[voice_buf_i] = buf;
+        voice_play_pcm(buf, n, rate);
     } else {
-        memcpy(L.pos, player.pos, sizeof(L.pos));
-    }
-    L.flying = player.flying;
-    for (i = 0; i < MAX_CARS; i++)
-        if (cars[i].kind != CAR_FREE && cars[i].own) own = i;
-    if (own >= 0) {
-        memcpy(L.car_pos, cars[own].pos, sizeof(L.car_pos));
-        L.car_yaw = cars[own].yaw;
-    }
-    world_save_all();
-    f = fopen(LEVEL_FILE, "wb");
-    if (!f) return;
-    fwrite(&L, 1, sizeof(L), f);
-    fclose(f);
-    has_save = 1;
-}
-
-static void spawn_family_car(const float pos[3], float yaw)
-{
-    int i = car_spawn(CAR_PARKED, pos[0], pos[1], pos[2], yaw, FAMILY_CAR_COLOR);
-    if (i >= 0) cars[i].own = 1;
-    L.has_car = 1;
-    memcpy(L.car_pos, pos, sizeof(L.car_pos));
-    L.car_yaw = yaw;
-}
-
-static void spawn_chaser(void)
-{
-    float fx = -sinf(cam_yaw), fz = -cosf(cam_yaw);
-    float x = player.pos[0] - fx * 26.0f, z = player.pos[2] - fz * 26.0f;
-    int top = world_top((int)floorf(x), (int)floorf(z));
-    car_spawn(CAR_CHASER, x, (float)(top >= 0 ? top + 1 : TOWN_Y + 1), z, cam_yaw, CHASER_COLOR);
-}
-
-static void begin_session(int next)
-{
-    cars_clear();
-    car_idx = -1;
-    memset(&player, 0, sizeof(player));
-    memcpy(player.pos, L.pos, sizeof(player.pos));
-    player.flying = L.flying;
-    cam_yaw = body_yaw = L.yaw;
-    if (L.has_car) spawn_family_car(L.car_pos, L.car_yaw);
-    loading_next = next;
-    mode = MODE_LOADING;
-    mode_time = 0.0f;
-    synth_music(-1);
-}
-
-static void new_game(void)
-{
-    Level keep = L;
-    worker_drain();
-    world_wipe(WORLD_DIR);
-    remove(LEVEL_FILE);
-    level_defaults();
-    L.radius = keep.radius;
-    L.look_speed = keep.look_speed;
-    L.music_vol = keep.music_vol;
-    L.sfx_vol = keep.sfx_vol;
-    L.show_info = keep.show_info;
-    L.day_cycle = keep.day_cycle;
-    world_init(L.seed, WORLD_DIR);
-    has_save = 0;
-    begin_session(MODE_INTRO);
-}
-
-/* -------------------------------------------------------------------- sky */
-
-static void compute_sky(SkyState *s, float time_of_day, float time_s, int underwater, int radius)
-{
-    float a = time_of_day * 2.0f * PI, sh = sinf(a);
-    float light = clampf(0.5f + sh * 2.5f, 0.0f, 1.0f);
-    float glow = clampf(1.0f - fabsf(sh) * 4.0f, 0.0f, 1.0f);
-    float ov = (1.0f - light) * 0.72f;
-    unsigned int night_overlay = rgb(8, 10, 30);
-    int sh8;
-
-    s->sun_angle = a;
-    s->time_s = time_s;
-    s->underwater = underwater;
-    s->night = 1.0f - light;
-    s->zenith = mix(rgb(4, 6, 20), rgb(78, 140, 230), light);
-    s->horizon = mix(mix(rgb(16, 20, 44), rgb(176, 210, 246), light), rgb(244, 150, 90), glow * 0.55f);
-    s->cloud = mix(mix(rgb(46, 50, 68), rgb(255, 255, 255), light), rgb(255, 196, 160), glow * 0.45f);
-    s->fog = 0xFF000000u;
-    for (sh8 = 0; sh8 < 24; sh8 += 8) {
-        float h = (float)((s->horizon >> sh8) & 0xFF), o = (float)((night_overlay >> sh8) & 0xFF);
-        float f = (h - o * ov) / (1.0f - ov);
-        s->fog |= (unsigned int)clampf(f, 0.0f, 255.0f) << sh8;
-    }
-    s->fog_end = radius * CH - 4.0f;
-    s->fog_start = s->fog_end * 0.55f;
-    if (underwater) {
-        s->fog = mix(rgb(6, 14, 36), rgb(24, 64, 140), light);
-        s->fog_start = 1.0f;
-        s->fog_end = 22.0f;
+        voice_say(text, LOOKS[who].voice_pitch, LOOKS[who].voice_formant);
     }
 }
 
-/* ------------------------------------------------------------------ radio */
+static int cs_speaking(void) { return voice_busy(); }
+
+static CsIO cs_io(void)
+{
+    CsIO io;
+    int i;
+    memset(&io, 0, sizeof(io));
+    for (i = 0; i < N_ACTORS; i++) io.actors[i] = &peds[i];
+    io.say = cs_say;
+    io.speaking = cs_speaking;
+    return io;
+}
+
+/* ------------------------------------------------------------------- radio */
 
 static void radio_play(void)
 {
@@ -441,109 +196,411 @@ static void radio_tick(void)
     }
 }
 
-/* ---------------------------------------------------------------- driving */
+/* ------------------------------------------------------------------- level */
 
-static void enter_car(int i)
+static void level_defaults(void)
 {
-    Car *c = &cars[i];
-    if (c->kind == CAR_TRAFFIC) show_banner("Водій утік!", NULL);
-    c->kind = CAR_PLAYER;
-    car_idx = i;
-    cam_yaw = c->yaw;
-    player.flying = 0;
-    synth_sfx(SFX_DOOR);
-    radio_play();
+    memset(&L, 0, sizeof(L));
+    memcpy(L.magic, LEVEL_MAGIC, sizeof(LEVEL_MAGIC));
+    L.pos = POI_SPAWN;
+    L.yaw = POI_SPAWN_YAW;
+    L.cam_yaw = POI_SPAWN_YAW;
+    L.time = 0.1f;
+    L.radius = 4;
+    L.look_speed = 3;
+    L.day_cycle = 1;
+    L.music_vol = 7;
+    L.sfx_vol = 9;
+    L.voice_vol = 10;
+    L.has_car = 1;
+    L.car_pos = POI_CAR;
+    L.car_yaw = POI_CAR_YAW;
+    story_start(&L.story);
 }
 
-static void exit_car(void)
+static int level_load(void)
 {
-    Car *c = &cars[car_idx];
-    car_exit_point(c, player.pos);
-    memset(player.vel, 0, sizeof(player.vel));
-    c->kind = CAR_PARKED;
-    car_idx = -1;
-    L.yaw = c->yaw;
-    synth_sfx(SFX_DOOR);
-    synth_music(-1);
-    synth_engine(0, 0.0f);
+    FILE *f = fopen(LEVEL_FILE, "rb");
+    int ok;
+    if (!f) return 0;
+    ok = fread(&L, 1, sizeof(L), f) == sizeof(L) && memcmp(L.magic, LEVEL_MAGIC, sizeof(LEVEL_MAGIC)) == 0;
+    fclose(f);
+    if (ok) {
+        L.radius = L.radius < 2 || L.radius > 6 ? 4 : L.radius;
+        L.look_speed = L.look_speed < 1 || L.look_speed > 5 ? 3 : L.look_speed;
+        L.radio = L.radio < 0 || L.radio >= RADIO_STATIONS ? 0 : L.radio;
+    }
+    return ok;
 }
 
-/* ------------------------------------------------------------------ blocks */
-
-static void break_block(const int hit[3])
+static void level_save(void)
 {
-    int above = world_get(hit[0], hit[1] + 1, hit[2]);
-    if (world_get(hit[0], hit[1], hit[2]) == B_BEDROCK) return;
-    world_set(hit[0], hit[1], hit[2], B_AIR);
-    if (block_shape(above) == SHAPE_CROSS || above == B_CACTUS) world_set(hit[0], hit[1] + 1, hit[2], B_AIR);
-    synth_sfx(SFX_BREAK);
+    FILE *f;
+    int i;
+    L.pos = player->pos;
+    L.yaw = player->yaw;
+    L.cam_yaw = cam_yaw;
+    if (car_idx >= 0) L.pos = car_door_point(&cars[car_idx]);
+    for (i = 0; i < MAX_CARS; i++)
+        if (cars[i].kind != CK_FREE && cars[i].own) {
+            L.car_pos = cars[i].pos;
+            L.car_yaw = cars[i].yaw;
+        }
+    mkdir(SAVE_DIR, 0777);
+    f = fopen(LEVEL_FILE, "wb");
+    if (!f) return;
+    fwrite(&L, 1, sizeof(L), f);
+    fclose(f);
+    has_save = 1;
 }
 
-static void place_block(const int hit[3], const int prev[3])
+/* ---------------------------------------------------------- world set-up */
+
+static void kaban_setup(void)
 {
-    int b = L.hotbar[L.sel];
-    const int *t = prev;
-    int target, below;
-    if (block_shape(world_get(hit[0], hit[1], hit[2])) == SHAPE_CROSS) t = hit;
-    if (t[1] < 0 || t[1] >= WH) return;
-    target = world_get(t[0], t[1], t[2]);
-    if (target != B_AIR && target != B_WATER && block_shape(target) != SHAPE_CROSS) return;
-    below = world_get(t[0], t[1] - 1, t[2]);
-    if (block_shape(b) == SHAPE_CROSS && below != B_GRASS && below != B_DIRT && below != B_SNOW_GRASS) return;
-    if (block_solid(b) && player_intersects_block(&player, t[0], t[1], t[2])) return;
-    world_set(t[0], t[1], t[2], b);
-    synth_sfx(SFX_PLACE);
+    V3 k = POI_KABAN_NPC;
+    int i;
+    ped_init(&peds[A_KABAN], CH_KABAN, k, 0.0f);
+    ped_init(&peds[A_THUG1], CH_THUG, v3(k.x - 2.3f, k.y, k.z - 0.9f), 0.2f);
+    ped_init(&peds[A_THUG2], CH_THUG, v3(k.x + 2.4f, k.y, k.z - 1.2f), -0.2f);
+    peds[A_KABAN].anim.gesture = GEST_HIPS;
+    peds[A_THUG1].anim.gesture = GEST_CROSSED;
+    peds[A_THUG2].anim.gesture = GEST_CROSSED;
+    for (i = 0; i < MAX_CARS; i++)
+        if (cars[i].kind == CK_SCRIPT && cars[i].type == CAR_GELENDER) return;
+    car_spawn(CK_SCRIPT, CAR_GELENDER, v3(-19.5f, WALK_H, -85.0f), PI_F / 2, KABAN_CAR_PAINT);
+    L.kaban_setup = 1;
 }
 
-/* --------------------------------------------------------------- dialogue */
-
-static void queue_dialog(const StoryOut *o)
+static void begin_session(void)
 {
     int i;
-    for (i = 0; i < o->lines && dlg_n < DLG_MAX; i++) {
-        dlg_speaker[dlg_n] = o->speaker[i];
-        dlg_text[dlg_n] = o->text[i];
-        dlg_n++;
+    cars_clear();
+    memset(peds, 0, sizeof(peds));
+    memset(extras, 0, sizeof(extras));
+    ped_init(player, CH_ANDRIY, L.pos, L.yaw);
+    ped_init(&peds[A_TARAS], CH_TARAS, POI_TARAS, 0.0f);
+    ped_init(&peds[A_GALYA], CH_GALYA, POI_GALYA, 0.0f);
+    ped_init(&peds[A_SELLER], CH_SELLER, POI_SELLER, 0.3f);
+    for (i = A_KABAN; i <= A_THUG2; i++) peds[i].active = 0;
+    if (L.kaban_setup) kaban_setup();
+    if (L.has_car) {
+        int k = car_spawn(CK_PARKED, CAR_LASTIVKA, L.car_pos, L.car_yaw, FAMILY_CAR_PAINT);
+        if (k >= 0) cars[k].own = 1;
     }
-    if (dlg_n > dlg_i && mode == MODE_PLAY) {
-        mode = MODE_DIALOG;
-        mode_time = 0.0f;
+    if (L.story.mission == M_TAIL)
+        car_spawn(CK_CHASER, CAR_GELENDER, v3(player->pos.x + 30, 0, player->pos.z), 0, KABAN_CAR_PAINT);
+    car_idx = -1;
+    pstate = P_FOOT;
+    cam_yaw = L.cam_yaw;
+    cam_pitch = -0.12f;
+    apply_volumes();
+    synth_music(-1);
+    in_game = 1;
+    mode = MODE_PLAY;
+    mode_time = 0.0f;
+}
+
+/* -------------------------------------------------------------------- sky */
+
+static void compute_sky(SkyState *s, float time_of_day, float time_s, float radius)
+{
+    float a = time_of_day * 2.0f * PI_F, sh = sinf(a);
+    float light = clampf(0.5f + sh * 2.5f, 0.0f, 1.0f);
+    float glow = clampf(1.0f - fabsf(sh) * 4.0f, 0.0f, 1.0f);
+    float ov = (1.0f - light) * 0.7f;
+    unsigned int night_overlay = rgb(8, 10, 30);
+    int sh8;
+    s->sun_angle = a;
+    s->time_s = time_s;
+    s->night = 1.0f - light;
+    s->zenith = mix(rgb(4, 6, 20), rgb(70, 132, 226), light);
+    s->horizon = mix(mix(rgb(16, 20, 44), rgb(186, 214, 244), light), rgb(244, 150, 90), glow * 0.55f);
+    s->cloud = mix(mix(rgb(46, 50, 68), rgb(255, 255, 255), light), rgb(255, 196, 160), glow * 0.45f);
+    s->fog = 0xFF000000u;
+    for (sh8 = 0; sh8 < 24; sh8 += 8) {
+        float h = (float)((s->horizon >> sh8) & 0xFF), o = (float)((night_overlay >> sh8) & 0xFF);
+        float f = (h - o * ov) / (1.0f - ov);
+        s->fog |= (unsigned int)clampf(f, 0.0f, 255.0f) << sh8;
+    }
+    s->fog_end = radius;
+    s->fog_start = radius * 0.45f;
+}
+
+/* ------------------------------------------------------------------ cars */
+
+static void flee_driver(V3 at, float away_yaw)
+{
+    int i;
+    for (i = 0; i < MAX_EXTRAS; i++)
+        if (!extras[i].active) {
+            V3 f = yaw_fwd(away_yaw);
+            ped_init(&extras[i], (i & 1) ? CH_SELLER : CH_THUG, at, away_yaw);
+            extras[i].goal = v3(at.x + f.x * 25.0f, at.y, at.z + f.z * 25.0f);
+            extras[i].has_goal = 1;
+            extras[i].walk_speed = 5.5f;
+            extra_t[i] = 7.0f;
+            return;
+        }
+}
+
+static void start_enter(int idx)
+{
+    Car *c = &cars[idx];
+    car_idx = idx;
+    pstate = P_ENTER_WALK;
+    pstate_t = 0.0f;
+    player->goal = car_door_point(c);
+    player->has_goal = 1;
+    player->walk_speed = 3.2f;
+    if (c->kind == CK_TRAFFIC) {
+        c->kind = CK_SCRIPT;
+        c->in_throttle = -1.0f;
+        c->in_steer = 0.0f;
     }
 }
 
-static void run_story(float dt)
+static void player_drive_tick(float dt, unsigned int buttons, unsigned int pressed, const SceCtrlData *pad)
 {
-    StoryView v;
-    StoryOut o;
-    int ch = car_find_kind(CAR_CHASER);
-    memset(&v, 0, sizeof(v));
-    memcpy(v.pos, player.pos, sizeof(v.pos));
-    v.in_car = car_idx >= 0;
-    v.in_own_car = car_idx >= 0 && cars[car_idx].own;
-    v.chaser_alive = ch >= 0;
-    if (ch >= 0) {
-        float dx = cars[ch].pos[0] - player.pos[0], dz = cars[ch].pos[2] - player.pos[2];
-        v.chaser_dist = sqrtf(dx * dx + dz * dz);
+    Car *c = &cars[car_idx];
+    float ax = analog(pad->Lx), ay = -analog(pad->Ly), throttle = ay;
+    if (buttons & PSP_CTRL_CROSS) throttle = 1.0f;
+    if (buttons & PSP_CTRL_SQUARE) throttle = -1.0f;
+    c->in_throttle = throttle;
+    c->in_steer = -ax;
+    c->in_handbrake = (buttons & PSP_CTRL_CIRCLE) != 0;
+    car_step(c, dt);
+    if (c->impact > 5.0f) synth_sfx(SFX_CRASH);
+    if (pressed & PSP_CTRL_UP) synth_sfx(SFX_HORN);
+    if (pressed & PSP_CTRL_RIGHT) { L.radio = (L.radio + 1) % RADIO_STATIONS; radio_track_i = 0; radio_play(); }
+    if (pressed & PSP_CTRL_LEFT) { L.radio = (L.radio + RADIO_STATIONS - 1) % RADIO_STATIONS; radio_track_i = 0; radio_play(); }
+    synth_engine(1, clampf((c->rpm - 800.0f) / 5400.0f, 0.0f, 1.0f));
+    radio_tick();
+    player->pos = car_seat_point(c);
+    player->yaw = c->yaw;
+    if ((pressed & PSP_CTRL_TRIANGLE) && fabsf(car_speed(c)) < 3.0f) {
+        pstate = P_EXIT_OPEN;
+        pstate_t = 0.0f;
+        c->in_throttle = 0.0f;
+        c->in_handbrake = 1;
+        synth_sfx(SFX_DOOR);
     }
-    story_update(&L.story, &v, dt, &o);
-    if (o.spawn_own_car && car_find_kind(CAR_PARKED) < 0) spawn_family_car(POI_CAR, POI_CAR_YAW);
-    else if (o.spawn_own_car) {
-        int i, found = 0;
-        for (i = 0; i < MAX_CARS; i++)
-            if (cars[i].kind != CAR_FREE && cars[i].own) found = 1;
-        if (!found) spawn_family_car(POI_CAR, POI_CAR_YAW);
+}
+
+static void force_exit_car(void)
+{
+    if (car_idx >= 0) {
+        Car *c = &cars[car_idx];
+        player->pos = car_door_point(c);
+        c->kind = CK_PARKED;
+        c->door = 0.0f;
     }
-    if (o.spawn_chaser) spawn_chaser();
-    if (o.remove_chaser && ch >= 0) cars[ch].kind = CAR_FREE;
-    if (o.mission_passed) {
+    car_idx = -1;
+    pstate = P_FOOT;
+    player->active = 1;
+    player->anim.sit = 0.0f;
+    player->anim.crouch = 0.0f;
+    synth_engine(0, 0.0f);
+    synth_music(-1);
+}
+
+/* states of getting in and out */
+static void car_transition_tick(float dt)
+{
+    Car *c = car_idx >= 0 ? &cars[car_idx] : NULL;
+    pstate_t += dt;
+    if (!c) {
+        pstate = P_FOOT;
+        return;
+    }
+    switch (pstate) {
+    case P_ENTER_WALK:
+        if (!player->has_goal || pstate_t > 3.0f) {
+            V3 r = yaw_right(c->yaw);
+            player->has_goal = 0;
+            player->goal_yaw = yaw_of(r.x, r.z);
+            player->face_goal_yaw = 1;
+            player->pos = car_door_point(c);
+            pstate = P_ENTER_OPEN;
+            pstate_t = 0.0f;
+            synth_sfx(SFX_DOOR);
+        }
+        break;
+    case P_ENTER_OPEN:
+        c->door = clampf(pstate_t / 0.35f, 0.0f, 1.0f);
+        if (pstate_t >= 0.35f) {
+            if (c->kind == CK_SCRIPT && !c->own && c->type != CAR_GELENDER) {
+                flee_driver(car_local(c, v3(-CAR_SPECS[c->type].width * 0.5f - 1.2f, 0, -0.3f)), c->yaw + PI_F / 2);
+                show_banner("Водій утік!", NULL, 2.0f);
+            }
+            pstate = P_ENTER_IN;
+            pstate_t = 0.0f;
+        }
+        break;
+    case P_ENTER_IN: {
+        float k = clampf(pstate_t / 0.45f, 0.0f, 1.0f);
+        player->anim.crouch = 0.6f * sinf(k * PI_F);
+        player->pos = v3_lerp(car_door_point(c), car_seat_point(c), smooth01(k));
+        if (k >= 1.0f) {
+            player->active = 0;
+            pstate = P_ENTER_CLOSE;
+            pstate_t = 0.0f;
+        }
+        break;
+    }
+    case P_ENTER_CLOSE:
+        c->door = 1.0f - clampf(pstate_t / 0.3f, 0.0f, 1.0f);
+        if (pstate_t >= 0.3f) {
+            c->kind = CK_PLAYER;
+            c->door = 0.0f;
+            pstate = P_DRIVE;
+            synth_sfx(SFX_DOOR);
+            radio_play();
+        }
+        break;
+    case P_EXIT_OPEN:
+        c->door = clampf(pstate_t / 0.3f, 0.0f, 1.0f);
+        car_step(c, dt);
+        if (pstate_t >= 0.3f) {
+            V3 r = yaw_right(c->yaw);
+            player->active = 1;
+            player->pos = car_door_point(c);
+            player->yaw = yaw_of(-r.x, -r.z);
+            player->anim.crouch = 0.4f;
+            player->vel = v3(0, 0, 0);
+            c->kind = CK_PARKED;
+            pstate = P_EXIT_CLOSE;
+            pstate_t = 0.0f;
+            synth_engine(0, 0.0f);
+            synth_music(-1);
+        }
+        break;
+    case P_EXIT_CLOSE:
+        c->door = 1.0f - clampf(pstate_t / 0.35f, 0.0f, 1.0f);
+        if (pstate_t >= 0.35f) {
+            c->door = 0.0f;
+            synth_sfx(SFX_DOOR);
+            car_idx = -1;
+            pstate = P_FOOT;
+        }
+        break;
+    default:
+        break;
+    }
+}
+
+/* ----------------------------------------------------------------- story */
+
+static void apply_story_out(const StoryOut *o)
+{
+    int ch = car_find_kind(CK_CHASER);
+    if (o->remove_chaser && ch >= 0) cars[ch].kind = CK_FREE;
+    if (o->kaban_setup) kaban_setup();
+    if (o->mission_passed && !o->pager) {
         synth_sfx(SFX_MISSION);
-        show_banner("Місію виконано!", NULL);
+        show_banner("Місію виконано!", story_title(&L.story), 3.5f);
     }
-    if (o.mission_failed) {
-        synth_sfx(SFX_FAIL);
-        show_banner("Не встиг!", NULL);
+    if (o->mission_failed) synth_sfx(SFX_FAIL);
+    if (o->pager) {
+        synth_sfx(SFX_CONFIRM);
+        show_banner(o->pager, NULL, 6.0f);
     }
-    queue_dialog(&o);
+    if (o->scene) {
+        if (car_idx >= 0 && o->scene != CS_FAIL) force_exit_car();
+        cs_start(&cs, o->scene);
+        mode = MODE_CUTSCENE;
+    }
+}
+
+static void finish_cutscene(void)
+{
+    StoryOut o;
+    int ch = car_find_kind(CK_SCRIPT);
+    int id = cs.id;
+    (void)ch;
+    voice_stop();
+    if (id == CS_KIOSK) {
+        int i;
+        for (i = 0; i < MAX_CARS; i++)
+            if (cars[i].kind == CK_SCRIPT && cars[i].type == CAR_GELENDER && !L.kaban_setup) cars[i].kind = CK_CHASER;
+    }
+    story_scene_done(&L.story, id, &o);
+    apply_story_out(&o);
+    mode = MODE_PLAY;
+    level_save();
+}
+
+static void handle_requests(int req)
+{
+    if (req & CS_REQ_CHASER)
+        car_spawn(CK_SCRIPT, CAR_GELENDER, v3(186.0f, 0.0f, -122.5f), PI_F / 2, KABAN_CAR_PAINT);
+    if (req & CS_REQ_KABAN_SETUP) kaban_setup();
+}
+
+/* ---------------------------------------------------------------- render */
+
+static void build_dynamic(V3 eye, float yaw, float radius)
+{
+    V3 f = yaw_fwd(yaw);
+    int i;
+    dyn.n = 0;
+    for (i = 0; i < MAX_CARS; i++) {
+        const Car *c = &cars[i];
+        V3 d;
+        if (c->kind == CK_FREE) continue;
+        d = v3_sub(c->pos, eye);
+        if (d.x * d.x + d.z * d.z > radius * radius) continue;
+        if (d.x * f.x + d.z * f.z < -8.0f) continue;
+        car_append_mesh(&dyn, c);
+    }
+    for (i = 0; i < N_ACTORS; i++) {
+        const Ped *p = &peds[i];
+        V3 d;
+        if (!p->active) continue;
+        if (p == player && (L.first_person || car_idx >= 0) && mode != MODE_CUTSCENE) continue;
+        d = v3_sub(p->pos, eye);
+        if (d.x * d.x + d.z * d.z > 90.0f * 90.0f) continue;
+        ped_append_mesh(&dyn, p);
+    }
+    for (i = 0; i < MAX_EXTRAS; i++)
+        if (extras[i].active) ped_append_mesh(&dyn, &extras[i]);
+}
+
+static void draw_world(V3 eye, float yaw, float pitch, const SkyState *sky, float radius, int markers)
+{
+    int i;
+    r_sky(sky, yaw, pitch, FOV);
+    r_camera(eye, yaw, pitch, FOV);
+    r_set_billboard_basis(yaw_right(yaw), v3(0, 1, 0));
+    r_city(eye, yaw, pitch, radius, sky);
+    for (i = 0; i < MAX_CARS; i++)
+        if (cars[i].kind != CK_FREE)
+            r_shadow(cars[i].pos, CAR_SPECS[cars[i].type].width * 0.62f, CAR_SPECS[cars[i].type].length * 0.58f,
+                     cars[i].yaw, 0.85f);
+    for (i = 0; i < N_ACTORS; i++)
+        if (peds[i].active && !(peds + i == player && car_idx >= 0))
+            r_shadow(peds[i].pos, 0.42f, 0.42f, 0.0f, 0.7f);
+    build_dynamic(eye, yaw, radius);
+    r_mesh(&dyn, sky);
+    r_night_overlay(sky);
+    r_glow(eye, radius, sky->night);
+    if (sky->night > 0.3f)
+        for (i = 0; i < MAX_CARS; i++) {
+            const Car *c = &cars[i];
+            V3 d;
+            if (c->kind == CK_FREE || c->kind == CK_PARKED) continue;
+            d = v3_sub(c->pos, eye);
+            if (d.x * d.x + d.z * d.z > 120.0f * 120.0f) continue;
+            r_flare(car_light_pos(c, 0), 0.9f, 0xE0B0F0FFu);
+            r_flare(car_light_pos(c, 1), 0.9f, 0xE0B0F0FFu);
+            r_flare(car_light_pos(c, 2), 0.45f, 0xC02020FFu);
+            r_flare(car_light_pos(c, 3), 0.45f, 0xC02020FFu);
+        }
+    r_clouds(eye, sky);
+    if (markers) {
+        V3 m;
+        if (story_marker(&L.story, &m)) r_marker(m, sky->time_s);
+    }
 }
 
 /* ------------------------------------------------------------------- main */
@@ -554,10 +611,8 @@ int main(void)
     SkyState sky;
     HudInfo hud;
     unsigned int old_buttons = 0, last_time;
-    float action_timer = 0.0f, swing = 0.0f, bob = 0.0f, name_timer = 0.0f;
-    float last_up = -1.0f, clock_s = 0.0f, autosave = 0.0f;
-    float fps = 60.0f, fps_acc = 0.0f;
-    int fps_frames = 0, menu_sel = 0, inv_cursor = 0, last_step = 0;
+    float clock_s = 0.0f, autosave = 0.0f, fps = 60.0f, fps_acc = 0.0f;
+    int fps_frames = 0, menu_sel = 0;
 
     setup_callbacks();
     sceCtrlSetSamplingCycle(0);
@@ -566,29 +621,27 @@ int main(void)
 
     r_init();
     audio_start();
-    build_offsets();
-    start_worker();
+    gm_init(&dyn);
+
+    /* build the town once, with a loading screen */
+    r_begin_frame(0xFF000000u);
+    hud_loading(0.1f, "Будуємо Соняшниківськ...");
+    r_end_frame();
+    city_build(1996);
+    carmodels_build();
+    r_flush_cache();
 
     has_save = level_load();
-    if (!has_save) {
-        level_defaults();
-        world_wipe(WORLD_DIR);
-    }
+    if (!has_save) level_defaults();
     apply_volumes();
-    world_init(L.seed, WORLD_DIR);
-    cars_clear();
     synth_music(MUS_MENU);
     menu_sel = has_save ? MENU_CONTINUE : MENU_NEW;
-
     last_time = now_us();
 
     while (running) {
-        unsigned int now = now_us(), pressed;
-        float dt = (now - last_time) / 1000000.0f;
-        float eye[3], view_yaw, view_pitch, dir[3], time_of_day = L.time;
-        int hit[3] = { 0, 0, 0 }, prev[3], has_hit = 0, pcx, pcz, underwater = 0, world_visible;
-        int focus_cx, focus_cz, stream_r = L.radius;
-
+        unsigned int now = now_us(), pressed, buttons;
+        float dt = (now - last_time) / 1000000.0f, view_yaw = 0, view_pitch = 0, radius;
+        V3 eye = v3(0, 0, 0), focus;
         last_time = now;
         if (dt > 0.05f) dt = 0.05f;
         clock_s += dt;
@@ -602,14 +655,14 @@ int main(void)
         }
         if (banner_t > 0.0f) banner_t -= dt;
         if (radio_timer > 0.0f) radio_timer -= dt;
-        if (name_timer > 0.0f) name_timer -= dt;
-        swing = swing > 0.0f ? swing - dt * 5.0f : 0.0f;
 
         sceCtrlReadBufferPositive(&pad, 1);
-        pressed = pad.Buttons & ~old_buttons;
-        old_buttons = pad.Buttons;
+        buttons = pad.Buttons;
+        pressed = buttons & ~old_buttons;
+        old_buttons = buttons;
+        radius = L.radius * 64.0f;
 
-        /* -------------------------------------------------- menus & input */
+        /* ---------------------------------------------------- menus */
         switch (mode) {
         case MODE_SPLASH:
             if ((pressed & (PSP_CTRL_CROSS | PSP_CTRL_START)) || mode_time > 7.0f) {
@@ -618,7 +671,6 @@ int main(void)
                 synth_sfx(SFX_CONFIRM);
             }
             break;
-
         case MODE_MENU:
             if (pressed & PSP_CTRL_UP) {
                 do menu_sel = (menu_sel + MENU_COUNT - 1) % MENU_COUNT;
@@ -632,23 +684,29 @@ int main(void)
             }
             if (pressed & PSP_CTRL_CROSS) {
                 synth_sfx(SFX_CONFIRM);
-                switch (menu_sel) {
-                case MENU_CONTINUE: begin_session(MODE_PLAY); break;
-                case MENU_NEW:
-                    if (has_save) { mode = MODE_CONFIRM; mode_time = 0.0f; }
-                    else new_game();
-                    break;
-                case MENU_SETTINGS: settings_return = MODE_MENU; mode = MODE_SETTINGS; menu_sel = 0; break;
-                default: running = 0; break;
-                }
+                if (menu_sel == MENU_CONTINUE) begin_session();
+                else if (menu_sel == MENU_NEW) {
+                    if (has_save) mode = MODE_CONFIRM;
+                    else { Level keep = L; level_defaults(); L.radius = keep.radius; L.music_vol = keep.music_vol; begin_session(); }
+                } else if (menu_sel == MENU_SETTINGS) { settings_return = MODE_MENU; mode = MODE_SETTINGS; menu_sel = 0; }
+                else running = 0;
             }
             break;
-
         case MODE_CONFIRM:
-            if (pressed & PSP_CTRL_CROSS) new_game();
+            if (pressed & PSP_CTRL_CROSS) {
+                Level keep = L;
+                level_defaults();
+                L.radius = keep.radius;
+                L.look_speed = keep.look_speed;
+                L.music_vol = keep.music_vol;
+                L.sfx_vol = keep.sfx_vol;
+                L.voice_vol = keep.voice_vol;
+                remove(LEVEL_FILE);
+                has_save = 0;
+                begin_session();
+            }
             if (pressed & PSP_CTRL_CIRCLE) { mode = MODE_MENU; menu_sel = MENU_NEW; }
             break;
-
         case MODE_SETTINGS:
             if (pressed & PSP_CTRL_UP) { menu_sel = (menu_sel + SET_COUNT - 1) % SET_COUNT; synth_sfx(SFX_UI); }
             if (pressed & PSP_CTRL_DOWN) { menu_sel = (menu_sel + 1) % SET_COUNT; synth_sfx(SFX_UI); }
@@ -656,384 +714,260 @@ int main(void)
                 int d = (pressed & PSP_CTRL_LEFT) ? -1 : 1;
                 synth_sfx(SFX_UI);
                 switch (menu_sel) {
-                case SET_RADIUS: L.radius = L.radius + d < 2 ? MAX_RADIUS : (L.radius + d > MAX_RADIUS ? 2 : L.radius + d); break;
+                case SET_RADIUS: L.radius = L.radius + d < 2 ? 6 : (L.radius + d > 6 ? 2 : L.radius + d); break;
                 case SET_LOOK:   L.look_speed = L.look_speed + d < 1 ? 5 : (L.look_speed + d > 5 ? 1 : L.look_speed + d); break;
                 case SET_MUSIC:  L.music_vol = (int)clampf((float)(L.music_vol + d), 0, 10); apply_volumes(); break;
                 case SET_SFX:    L.sfx_vol = (int)clampf((float)(L.sfx_vol + d), 0, 10); apply_volumes(); break;
+                case SET_VOICE:  L.voice_vol = (int)clampf((float)(L.voice_vol + d), 0, 10); apply_volumes(); break;
                 case SET_CYCLE:  L.day_cycle = !L.day_cycle; break;
-                case SET_TIME:   L.time = (L.time > 0.02f && L.time < 0.48f) ? 0.55f : 0.08f; break;
+                case SET_TIME:   L.time = (L.time > 0.02f && L.time < 0.48f) ? 0.55f : 0.1f; break;
                 case SET_INFO:   L.show_info = !L.show_info; break;
-                default:
-                    if (pressed & PSP_CTRL_CROSS) { mode = settings_return; menu_sel = 0; }
-                    break;
+                default: if (pressed & PSP_CTRL_CROSS) { mode = settings_return; menu_sel = 0; } break;
                 }
             }
             if (pressed & PSP_CTRL_CIRCLE) { mode = settings_return; menu_sel = 0; }
             break;
-
-        case MODE_LOADING:
-            break;
-
-        case MODE_INTRO: {
-            int slide = (int)L.story.step;
-            if (pressed & PSP_CTRL_CROSS) {
-                synth_sfx(SFX_UI);
-                if (slide < STORY_INTRO_SLIDES && mode_time * 35.0f < (float)strlen(STORY_INTRO[slide])) mode_time = 100.0f;
-                else {
-                    L.story.step = slide + 1;
-                    mode_time = 0.0f;
-                    if (L.story.step >= STORY_INTRO_SLIDES) {
-                        L.story.step = 0;
-                        mode = MODE_PLAY;
-                        in_game = 1;
-                        synth_music(-1);
-                        show_banner(story_title(&L.story), "Розділ 1");
-                        level_save();
-                    }
-                }
-            }
-            break;
-        }
-
         case MODE_PAUSE:
             if (pressed & (PSP_CTRL_START | PSP_CTRL_CIRCLE)) mode = MODE_PLAY;
             if (pressed & PSP_CTRL_UP) { menu_sel = (menu_sel + PAUSE_COUNT - 1) % PAUSE_COUNT; synth_sfx(SFX_UI); }
             if (pressed & PSP_CTRL_DOWN) { menu_sel = (menu_sel + 1) % PAUSE_COUNT; synth_sfx(SFX_UI); }
             if (pressed & PSP_CTRL_CROSS) {
                 synth_sfx(SFX_CONFIRM);
-                switch (menu_sel) {
-                case PAUSE_RESUME: mode = MODE_PLAY; break;
-                case PAUSE_BLOCKS: mode = MODE_INVENTORY; break;
-                case PAUSE_SETTINGS: settings_return = MODE_PAUSE; mode = MODE_SETTINGS; menu_sel = 0; break;
-                default:
+                if (menu_sel == PAUSE_RESUME) mode = MODE_PLAY;
+                else if (menu_sel == PAUSE_SETTINGS) { settings_return = MODE_PAUSE; mode = MODE_SETTINGS; menu_sel = 0; }
+                else {
                     level_save();
                     in_game = 0;
                     synth_engine(0, 0.0f);
                     synth_music(MUS_MENU);
                     mode = MODE_MENU;
                     menu_sel = MENU_CONTINUE;
-                    break;
                 }
             }
             break;
-
-        case MODE_INVENTORY: {
-            int n = B_COUNT - 1;
-            if (pressed & (PSP_CTRL_SELECT | PSP_CTRL_CIRCLE | PSP_CTRL_START)) mode = MODE_PLAY;
-            if (pressed & PSP_CTRL_LEFT) inv_cursor = (inv_cursor + n - 1) % n;
-            if (pressed & PSP_CTRL_RIGHT) inv_cursor = (inv_cursor + 1) % n;
-            if ((pressed & PSP_CTRL_UP) && inv_cursor >= INV_COLS) inv_cursor -= INV_COLS;
-            if ((pressed & PSP_CTRL_DOWN) && inv_cursor + INV_COLS < n) inv_cursor += INV_COLS;
-            if (pressed & PSP_CTRL_LTRIGGER) L.sel = (L.sel + HOTBAR_N - 1) % HOTBAR_N;
-            if (pressed & PSP_CTRL_RTRIGGER) L.sel = (L.sel + 1) % HOTBAR_N;
-            if (pressed & PSP_CTRL_CROSS) {
-                L.hotbar[L.sel] = inv_cursor + 1;
-                name_timer = 2.0f;
-                synth_sfx(SFX_UI);
-            }
+        default:
             break;
         }
 
-        case MODE_DIALOG:
-            if (pressed & PSP_CTRL_CROSS) {
-                synth_sfx(SFX_UI);
-                if (mode_time * 45.0f < (float)strlen(dlg_text[dlg_i])) mode_time = 100.0f;
-                else if (++dlg_i >= dlg_n) {
-                    dlg_i = dlg_n = 0;
-                    mode = MODE_PLAY;
-                } else {
-                    mode_time = 0.0f;
-                }
-            }
-            break;
-
-        case MODE_PLAY: {
-            float ls = 1.2f + 0.6f * L.look_speed;
-            if (pressed & PSP_CTRL_START) { mode = MODE_PAUSE; menu_sel = 0; synth_sfx(SFX_UI); break; }
-
-            if (car_idx >= 0) {
-                /* ---------------- driving ---------------- */
-                Car *c = &cars[car_idx];
-                float ax = analog(pad.Lx), ay = -analog(pad.Ly), throttle = ay, steer = -ax;
-                int ev;
-                if (pad.Buttons & PSP_CTRL_CROSS) throttle = 1.0f;
-                if (pad.Buttons & PSP_CTRL_SQUARE) throttle = -1.0f;
-                if (pad.Buttons & PSP_CTRL_LTRIGGER) steer = 1.0f;
-                if (pad.Buttons & PSP_CTRL_RTRIGGER) steer = -1.0f;
-                ev = car_physics(c, throttle, steer, dt);
-                if (ev & CAR_EV_CRASH) synth_sfx(SFX_CRASH);
-                if (pressed & PSP_CTRL_UP) synth_sfx(SFX_HORN);
-                if (pressed & PSP_CTRL_RIGHT) { L.radio = (L.radio + 1) % RADIO_STATIONS; radio_track_i = 0; radio_play(); }
-                if (pressed & PSP_CTRL_LEFT) { L.radio = (L.radio + RADIO_STATIONS - 1) % RADIO_STATIONS; radio_track_i = 0; radio_play(); }
-                if (pressed & PSP_CTRL_SELECT) L.third_person = !L.third_person;
-                synth_engine(1, fabsf(c->speed) / CAR_MAX_SPEED);
-                radio_tick();
-                memcpy(player.pos, c->pos, sizeof(player.pos));
-                cam_yaw = wrapf(cam_yaw + wrapf(c->yaw - cam_yaw) * clampf(dt * 3.0f, 0.0f, 1.0f));
-                if (pad.Buttons & PSP_CTRL_TRIANGLE) cam_yaw = wrapf(c->yaw + PI); /* look back */
-                if ((pressed & PSP_CTRL_DOWN) && fabsf(c->speed) < 4.0f) exit_car();
-            } else {
-                /* ---------------- on foot ---------------- */
-                float fx, fz, ax, ay, speed, mx, mz;
-                int up;
-                if (pad.Buttons & PSP_CTRL_SQUARE)   L.yaw += ls * dt;
-                if (pad.Buttons & PSP_CTRL_CIRCLE)   L.yaw -= ls * dt;
-                if (pad.Buttons & PSP_CTRL_TRIANGLE) L.pitch += ls * 0.75f * dt;
-                if (pad.Buttons & PSP_CTRL_CROSS)    L.pitch -= ls * 0.75f * dt;
-                L.pitch = clampf(L.pitch, -1.55f, 1.55f);
-                L.yaw = wrapf(L.yaw);
-
-                if (pressed & PSP_CTRL_RIGHT) { L.sel = (L.sel + 1) % HOTBAR_N; name_timer = 2.0f; }
-                if (pressed & PSP_CTRL_LEFT)  { L.sel = (L.sel + HOTBAR_N - 1) % HOTBAR_N; name_timer = 2.0f; }
-                if (pressed & PSP_CTRL_SELECT) L.third_person = !L.third_person;
-
-                if (pressed & PSP_CTRL_UP) {
-                    if (clock_s - last_up < 0.3f) {
-                        player.flying = !player.flying;
-                        player.vel[1] = 0.0f;
-                        last_up = -1.0f;
-                    } else {
-                        last_up = clock_s;
-                    }
-                }
-                if (pressed & PSP_CTRL_DOWN) {
-                    int ci = car_nearest(player.pos, 3.4f);
-                    if (ci >= 0) {
-                        enter_car(ci);
-                        break;
-                    }
-                }
-
-                fx = -sinf(L.yaw);
-                fz = -cosf(L.yaw);
-                ax = analog(pad.Lx);
-                ay = -analog(pad.Ly);
-                speed = player.flying ? 10.0f : 4.3f;
-                mx = (fx * ay - fz * ax) * speed;
-                mz = (fz * ay + fx * ax) * speed;
-                up = (pad.Buttons & PSP_CTRL_UP) ? 1 : ((pad.Buttons & PSP_CTRL_DOWN) && player.flying ? -1 : 0);
-                if (world_chunk((int)floorf(player.pos[0]) >> 4, (int)floorf(player.pos[2]) >> 4))
-                    player_update(&player, mx, mz, up, dt);
-                {
-                    int i;
-                    for (i = 0; i < MAX_CARS; i++)
-                        if (cars[i].kind != CAR_FREE && fabsf(cars[i].pos[1] - player.pos[1]) < 1.8f)
-                            car_push_out(&cars[i], &player.pos[0], &player.pos[2], PLAYER_HALF_W);
-                }
-                if ((ax != 0.0f || ay != 0.0f)) {
-                    body_yaw = atan2f(-mx, -mz);
-                    if (player.on_ground) {
-                        bob += dt * 9.0f;
-                        if ((int)(bob / PI) != last_step) {
-                            last_step = (int)(bob / PI);
-                            synth_sfx(SFX_STEP);
-                        }
-                    }
-                }
-                cam_yaw = L.yaw;
-            }
-            break;
-        }
-        }
-
-        /* -------------------------------------------------------- update */
-        in_game = mode == MODE_PLAY || mode == MODE_PAUSE || mode == MODE_INVENTORY || mode == MODE_DIALOG ||
-                  mode == MODE_INTRO || (mode == MODE_SETTINGS && settings_return == MODE_PAUSE);
+        /* ---------------------------------------------------- gameplay */
         if (mode == MODE_PLAY) {
-            int ev;
+            float ls = 1.0f + 0.5f * L.look_speed;
+            StoryView v;
+            StoryOut o;
+            int ev, i;
+            if (pressed & PSP_CTRL_START) { mode = MODE_PAUSE; menu_sel = 0; synth_sfx(SFX_UI); }
             if (L.day_cycle) {
                 L.time += dt / DAY_LENGTH;
                 if (L.time >= 1.0f) L.time -= 1.0f;
             }
-            ev = cars_update(dt, player.pos, car_idx >= 0 ? NULL : player.pos, 1);
+            /* camera control */
+            if (buttons & PSP_CTRL_LTRIGGER && !(buttons & PSP_CTRL_RTRIGGER)) cam_yaw += ls * dt;
+            if (buttons & PSP_CTRL_RTRIGGER && !(buttons & PSP_CTRL_LTRIGGER)) cam_yaw -= ls * dt;
+            if (pstate == P_FOOT) {
+                if (buttons & PSP_CTRL_UP) cam_pitch += 1.2f * dt;
+                if (buttons & PSP_CTRL_DOWN) cam_pitch -= 1.2f * dt;
+                cam_pitch = clampf(cam_pitch, L.first_person ? -1.3f : -0.75f, L.first_person ? 1.2f : 0.35f);
+                if (pressed & PSP_CTRL_SELECT) L.first_person = !L.first_person;
+            } else if (pstate == P_DRIVE && (pressed & PSP_CTRL_SELECT)) {
+                L.first_person = !L.first_person;
+            }
+            cam_yaw = wrap_pi(cam_yaw);
+
+            if (pstate == P_FOOT) {
+                float ax = analog(pad.Lx), ay = -analog(pad.Ly);
+                V3 f = yaw_fwd(cam_yaw), r = yaw_right(cam_yaw);
+                V3 move = v3(f.x * ay + r.x * ax, 0, f.z * ay + r.z * ax);
+                int pev;
+                if (L.first_person) move = v3(f.x * ay + r.x * ax, 0, f.z * ay + r.z * ax);
+                pev = ped_update(player, move, (buttons & PSP_CTRL_CROSS) != 0, (pressed & PSP_CTRL_SQUARE) != 0, dt);
+                if (L.first_person) player->yaw = cam_yaw;
+                if (pev & (PED_EV_STEP | PED_EV_LAND)) synth_sfx(SFX_STEP);
+                {
+                    float hit = car_push_point(&player->pos, 0.32f);
+                    if (hit > 5.0f && player->knock_t <= 0.0f) {
+                        player->knock_t = 2.6f;
+                        synth_sfx(SFX_CRASH);
+                    }
+                }
+                /* camera follows behind when walking */
+                if ((ax != 0.0f || ay != 0.0f) && !L.first_person && !(buttons & (PSP_CTRL_LTRIGGER | PSP_CTRL_RTRIGGER)))
+                    cam_yaw = wrap_pi(cam_yaw + wrap_pi(player->yaw - cam_yaw) * clampf(dt * 1.2f, 0.0f, 1.0f));
+                if (pressed & PSP_CTRL_TRIANGLE) {
+                    int k = car_nearest(player->pos, 4.5f);
+                    if (k >= 0) start_enter(k);
+                }
+            } else if (pstate == P_DRIVE) {
+                player_drive_tick(dt, buttons, pressed, &pad);
+            } else {
+                if (pstate == P_ENTER_WALK) ped_update(player, v3(0, 0, 0), 0, 0, dt);
+                else if (player->active) ped_update(player, v3(0, 0, 0), 0, 0, dt);
+                car_transition_tick(dt);
+            }
+
+            focus = car_idx >= 0 ? cars[car_idx].pos : player->pos;
+            ev = cars_update(dt, focus, pstate == P_FOOT ? &player->pos : NULL, 1);
             if (ev & CAR_EV_HONK) synth_sfx(SFX_HORN);
-            if (ev & CAR_EV_CRASH) synth_sfx(SFX_CRASH);
-            run_story(dt);
+            if ((ev & CAR_EV_CRASH) && car_idx < 0) synth_sfx(SFX_CRASH);
+
+            /* NPCs: idle, look at the player when close */
+            for (i = 1; i < N_ACTORS; i++) {
+                Ped *p = &peds[i];
+                V3 d;
+                if (!p->active) continue;
+                d = v3_sub(player->pos, p->pos);
+                p->has_look_at = d.x * d.x + d.z * d.z < 64.0f;
+                p->look_at = v3(player->pos.x, player->pos.y + 1.6f, player->pos.z);
+                ped_update(p, v3(0, 0, 0), 0, 0, dt);
+                if (car_push_point(&p->pos, 0.32f) > 5.0f && p->knock_t <= 0.0f) {
+                    p->knock_t = 2.6f;
+                    synth_sfx(SFX_CRASH);
+                }
+            }
+            for (i = 0; i < MAX_EXTRAS; i++)
+                if (extras[i].active) {
+                    ped_update(&extras[i], v3(0, 0, 0), 0, 0, dt);
+                    extra_t[i] -= dt;
+                    if (extra_t[i] <= 0.0f) extras[i].active = 0;
+                }
+
+            /* story */
+            memset(&v, 0, sizeof(v));
+            v.pos = focus;
+            v.in_car = pstate == P_DRIVE;
+            v.in_own_car = pstate == P_DRIVE && cars[car_idx].own;
+            {
+                int ch = car_find_kind(CK_CHASER);
+                v.chaser_alive = ch >= 0;
+                if (ch >= 0) {
+                    V3 d = v3_sub(cars[ch].pos, focus);
+                    v.chaser_dist = sqrtf(d.x * d.x + d.z * d.z);
+                }
+            }
+            if (pstate == P_FOOT || pstate == P_DRIVE) {
+                story_update(&L.story, &v, dt, &o);
+                apply_story_out(&o);
+            }
             autosave += dt;
-            if (autosave > AUTOSAVE_EVERY) {
+            if (autosave > AUTOSAVE_EVERY && mode == MODE_PLAY) {
                 autosave = 0.0f;
                 level_save();
             }
-            if (car_idx < 0) synth_engine(0, 0.0f);
+        } else if (mode == MODE_CUTSCENE) {
+            CsIO io = cs_io();
+            int i;
+            cs_update(&cs, &io, dt, (pressed & PSP_CTRL_CROSS) != 0, (pressed & PSP_CTRL_START) != 0);
+            handle_requests(cs.requests);
+            for (i = 0; i < N_ACTORS; i++)
+                if (peds[i].active) {
+                    if (i == cs.speaker) peds[i].anim.mouth = clampf(voice_level() * 1.6f, 0.0f, 1.0f);
+                    else peds[i].anim.mouth = 0.0f;
+                    ped_update(&peds[i], v3(0, 0, 0), 0, 0, dt);
+                }
+            cars_update(dt, player->pos, &player->pos, 0);
+            if (!cs.running) finish_cutscene();
         }
+        letterbox = approach(letterbox, mode == MODE_CUTSCENE ? 1.0f : 0.0f, dt * 2.5f);
 
-        /* --------------------------------------------------------- camera */
-        world_visible = mode != MODE_SPLASH && mode != MODE_LOADING;
-        if (in_game) {
-            float head[3], dist = 0.0f;
-            if (car_idx >= 0) {
-                const Car *c = &cars[car_idx];
-                head[0] = c->pos[0]; head[1] = c->pos[1] + 1.8f; head[2] = c->pos[2];
-                view_yaw = cam_yaw;
-                view_pitch = -0.2f;
-                dist = L.third_person ? 10.0f : 7.0f;
-            } else {
-                head[0] = player.pos[0]; head[1] = player.pos[1] + PLAYER_EYE; head[2] = player.pos[2];
-                view_yaw = L.yaw;
-                view_pitch = L.pitch;
-                dist = L.third_person ? 4.0f : 0.0f;
-            }
-            dir[0] = -sinf(view_yaw) * cosf(view_pitch);
-            dir[1] = sinf(view_pitch);
-            dir[2] = -cosf(view_yaw) * cosf(view_pitch);
-            eye[0] = head[0]; eye[1] = head[1]; eye[2] = head[2];
-            if (dist > 0.0f) {
-                float d;
-                for (d = 0.3f; d <= dist; d += 0.25f) {
-                    float px = head[0] - dir[0] * d, py = head[1] - dir[1] * d + 0.3f, pz = head[2] - dir[2] * d;
-                    if (block_solid(world_get((int)floorf(px), (int)floorf(py), (int)floorf(pz)))) break;
-                    eye[0] = px; eye[1] = py; eye[2] = pz;
-                }
-            }
-            if (car_idx < 0 && mode == MODE_PLAY) {
-                if (dist > 0.0f) {
-                    float back = sqrtf((eye[0] - head[0]) * (eye[0] - head[0]) + (eye[2] - head[2]) * (eye[2] - head[2]));
-                    has_hit = world_raycast(eye, dir, REACH + back, hit, prev);
+        /* ---------------------------------------------------- camera */
+        if (mode == MODE_CUTSCENE) {
+            CsIO io = cs_io();
+            V3 tgt, d;
+            cs_camera(&cs, &io, &eye, &tgt);
+            d = v3_sub(tgt, eye);
+            view_yaw = yaw_of(d.x, d.z);
+            view_pitch = atan2f(d.y, sqrtf(d.x * d.x + d.z * d.z));
+        } else if (in_game && (mode == MODE_PLAY || mode == MODE_PAUSE || (mode == MODE_SETTINGS && settings_return == MODE_PAUSE))) {
+            if (car_idx >= 0 && pstate == P_DRIVE) {
+                Car *c = &cars[car_idx];
+                float sp = v3_len(c->vel), want = c->yaw, dist = 6.0f + sp * 0.06f;
+                V3 tgt = v3(c->pos.x, c->pos.y + 1.4f, c->pos.z), back;
+                if (sp > 3.0f && car_speed(c) > 0.0f) want = yaw_of(c->vel.x, c->vel.z);
+                if ((buttons & PSP_CTRL_LTRIGGER) && (buttons & PSP_CTRL_RTRIGGER)) want = wrap_pi(c->yaw + PI_F);
+                cam_yaw = wrap_pi(cam_yaw + wrap_pi(want - cam_yaw) * clampf(dt * 3.0f, 0.0f, 1.0f));
+                if (L.first_person) {
+                    eye = car_local(c, v3(0, CAR_SPECS[c->type].height + 0.1f, -0.3f));
+                    view_yaw = c->yaw;
+                    view_pitch = -0.08f;
                 } else {
-                    has_hit = world_raycast(eye, dir, REACH, hit, prev);
+                    view_yaw = cam_yaw;
+                    view_pitch = -0.2f;
+                    back = v3_scale(v3(-sinf(view_yaw) * cosf(view_pitch), sinf(view_pitch), -cosf(view_yaw) * cosf(view_pitch)), -1.0f);
+                    dist = city_raycast(tgt, back, dist) - 0.3f;
+                    eye = v3_add(tgt, v3_add(v3_scale(back, dist), v3(0, 0.6f, 0)));
                 }
-                action_timer -= dt;
-                if (pressed & (PSP_CTRL_LTRIGGER | PSP_CTRL_RTRIGGER)) action_timer = 0.0f;
-                if ((pad.Buttons & (PSP_CTRL_LTRIGGER | PSP_CTRL_RTRIGGER)) && action_timer <= 0.0f) {
-                    if (has_hit) {
-                        if (pad.Buttons & PSP_CTRL_LTRIGGER) break_block(hit);
-                        else place_block(hit, prev);
-                    }
-                    swing = 1.0f;
-                    action_timer = 0.22f;
+            } else {
+                V3 head = v3(player->pos.x, player->pos.y + 1.55f, player->pos.z);
+                view_yaw = cam_yaw;
+                view_pitch = cam_pitch;
+                if (L.first_person && pstate == P_FOOT) {
+                    eye = v3(head.x, head.y + 0.1f, head.z);
+                } else {
+                    V3 dir = v3(-sinf(view_yaw) * cosf(view_pitch), sinf(view_pitch), -cosf(view_yaw) * cosf(view_pitch));
+                    V3 back = v3_scale(dir, -1.0f);
+                    float dist = city_raycast(head, back, 3.8f) - 0.25f;
+                    if (dist < 0.4f) dist = 0.4f;
+                    eye = v3_add(head, v3_scale(back, dist));
+                    eye.y += 0.25f;
                 }
             }
-            focus_cx = (int)floorf(player.pos[0]) >> 4;
-            focus_cz = (int)floorf(player.pos[2]) >> 4;
         } else {
             /* menu panorama: slow orbit over the town at sunset */
-            float a = clock_s * 0.04f, dx, dz;
-            eye[0] = cosf(a) * 70.0f;
-            eye[1] = TOWN_Y + 26.0f;
-            eye[2] = sinf(a) * 70.0f;
-            dx = -eye[0];
-            dz = -eye[2];
-            view_yaw = atan2f(-dx, -dz) + 0.35f;
-            view_pitch = -0.28f;
-            time_of_day = 0.46f;
-            focus_cx = 0;
-            focus_cz = 0;
-            stream_r = L.radius < 4 ? L.radius : 4;
-            if (mode == MODE_LOADING) {
-                focus_cx = (int)floorf(player.pos[0]) >> 4;
-                focus_cz = (int)floorf(player.pos[2]) >> 4;
-                stream_r = L.radius;
-            }
+            float a = clock_s * 0.035f;
+            V3 d;
+            eye = v3(cosf(a) * 150.0f, 46.0f, sinf(a) * 150.0f);
+            d = v3_sub(v3(0, 0, 0), eye);
+            view_yaw = yaw_of(d.x, d.z) + 0.3f;
+            view_pitch = -0.25f;
+            radius = 256.0f;
         }
 
-        stream_chunks(focus_cx, focus_cz, stream_r);
-        pcx = focus_cx;
-        pcz = focus_cz;
-
-        if (mode == MODE_LOADING) {
-            int total, r = L.radius < 3 ? L.radius : 3;
-            int done = area_progress(focus_cx, focus_cz, r, &total);
-            if (done >= total) {
-                if (loading_next == MODE_PLAY && !has_save) loading_next = MODE_INTRO;
-                if (loading_next == MODE_INTRO) {
-                    int top = world_top((int)floorf(player.pos[0]), (int)floorf(player.pos[2]));
-                    if (top >= 0) player.pos[1] = (float)(top + 1);
-                    L.story.step = 0;
-                    synth_music(MUS_MENU);
-                } else {
-                    in_game = 1;
-                    if (L.story.mission == M_TAIL && car_find_kind(CAR_CHASER) < 0) spawn_chaser();
-                    show_banner(story_title(&L.story), NULL);
-                }
-                mode = loading_next;
-                mode_time = 0.0f;
-            }
-            r_begin_frame(0xFF000000u);
-            hud_loading(done, total, "Завантаження Соняшниківська...");
-            r_end_frame();
-            continue;
-        }
-
-        if (in_game)
-            underwater = world_get((int)floorf(eye[0]), (int)floorf(eye[1]), (int)floorf(eye[2])) == B_WATER;
-        compute_sky(&sky, time_of_day, clock_s, underwater, in_game ? L.radius : stream_r);
-
-        /* -------------------------------------------------------- render */
-        r_begin_frame(underwater ? sky.fog : sky.zenith);
-        if (world_visible) {
-            int i, lights = sky.night > 0.35f;
-            float fade = sky.fog_end + 8.0f;
-            r_sky(&sky, view_yaw, view_pitch);
-            r_camera(eye, view_yaw, view_pitch);
-            r_world(eye, view_yaw, view_pitch, pcx, pcz, in_game ? L.radius : stream_r, &sky);
-            for (i = 0; i < MAX_CARS; i++) {
-                const Car *c = &cars[i];
-                float dx, dz;
-                if (c->kind == CAR_FREE) continue;
-                dx = c->pos[0] - eye[0];
-                dz = c->pos[2] - eye[2];
-                if (dx * dx + dz * dz > fade * fade) continue;
-                r_car(c->pos, c->yaw, c->color, lights, &sky);
-            }
-            if (in_game && car_idx < 0 && L.third_person)
-                r_player_model(player.pos, body_yaw, bob, 1.0f, &sky);
-            if (has_hit && mode == MODE_PLAY) r_outline(hit);
-            r_night_overlay(&sky);
-            r_camera(eye, view_yaw, view_pitch);
-            r_clouds(eye, &sky);
-            if (in_game) {
-                float mp[3];
-                if (story_marker(&L.story, mp)) r_marker(mp, clock_s);
-                if (mode == MODE_PLAY && car_idx < 0 && !L.third_person)
-                    r_held_block(L.hotbar[L.sel], swing, bob, 1.0f - sky.night * 0.65f);
-            }
-        }
+        /* ---------------------------------------------------- render */
+        compute_sky(&sky, in_game ? L.time : 0.46f, clock_s, radius);
+        r_begin_frame(sky.zenith);
+        if (mode != MODE_SPLASH) draw_world(eye, view_yaw, view_pitch, &sky, radius, mode == MODE_PLAY);
 
         switch (mode) {
-        case MODE_SPLASH:    hud_splash(mode_time); break;
-        case MODE_MENU:      hud_main_menu(menu_sel, has_save, clock_s); break;
+        case MODE_SPLASH: hud_splash(mode_time); break;
+        case MODE_MENU: hud_main_menu(menu_sel, has_save); break;
         case MODE_CONFIRM:
-            hud_main_menu(MENU_NEW, has_save, clock_s);
+            hud_main_menu(MENU_NEW, has_save);
             hud_confirm("Почати нову гру? Поточне збереження буде втрачено.", "✕ — так, нова гра", "○ — ні");
             break;
-        case MODE_SETTINGS:  hud_settings(menu_sel, &L); break;
-        case MODE_INTRO:     hud_intro(L.story.step < STORY_INTRO_SLIDES ? L.story.step : 0, mode_time); break;
-        case MODE_PAUSE:     hud_pause(menu_sel); break;
-        case MODE_INVENTORY: hud_inventory(inv_cursor, &L); break;
-        case MODE_DIALOG:
-            if (dlg_i < dlg_n) hud_dialog(dlg_speaker[dlg_i], dlg_text[dlg_i], mode_time);
+        case MODE_SETTINGS: hud_settings(menu_sel, &L); break;
+        case MODE_PAUSE: hud_pause(menu_sel); break;
+        case MODE_CUTSCENE:
+            hud_cutscene(cs.sub_text ? cs.sub_who : NULL, cs.sub_text, cs.sub_t, letterbox, cs.title, cs.title2,
+                         cs.title_t, cs.fade);
             break;
         default: {
-            float mp[3];
-            int bio;
+            V3 m;
             memset(&hud, 0, sizeof(hud));
             hud.fps = fps;
-            hud.has_hit = has_hit;
-            hud.hit_block = has_hit ? world_get(hit[0], hit[1], hit[2]) : 0;
-            if (hud.hit_block >= B_COUNT) hud.hit_block = 0;
-            hud.in_car = car_idx >= 0;
-            hud.crosshair = car_idx < 0;
-            hud.hotbar = car_idx < 0;
-            hud.near_car = car_idx < 0 && car_nearest(player.pos, 3.4f) >= 0;
-            hud.can_exit = car_idx >= 0;
-            hud.speed_kmh = car_idx >= 0 ? fabsf(cars[car_idx].speed) * 3.6f : 0.0f;
+            hud.in_car = pstate == P_DRIVE;
+            if (hud.in_car) {
+                hud.speed_kmh = fabsf(car_speed(&cars[car_idx])) * 3.6f;
+                hud.rpm = cars[car_idx].rpm;
+                hud.gear = cars[car_idx].gear;
+                hud.hint = "✕ газ  □ гальмо  ○ ручник  △ вийти  ↑ сигнал  ←→ радіо";
+            } else if (pstate == P_FOOT && car_nearest(player->pos, 4.5f) >= 0) {
+                hud.hint = "△ — сісти в машину";
+            }
             hud.radio_text = radio_buf;
             hud.radio_timer = radio_timer;
             hud.banner = banner;
             hud.banner_sub = banner_sub;
             hud.banner_timer = banner_t;
-            hud.name_timer = name_timer;
-            hud.underwater = underwater;
-            hud.px = (int)floorf(player.pos[0]);
-            hud.py = (int)floorf(player.pos[1]);
-            hud.pz = (int)floorf(player.pos[2]);
-            gen_column(L.seed, hud.px, hud.pz, &bio);
-            hud.biome = biome_name(bio);
-            if (story_marker(&L.story, mp)) {
-                float dx = mp[0] - player.pos[0], dz = mp[2] - player.pos[2];
+            hud.crosshair = L.first_person && pstate == P_FOOT;
+            hud.px = (int)player->pos.x;
+            hud.py = (int)player->pos.y;
+            hud.pz = (int)player->pos.z;
+            hud.area = city_in_town(player->pos.x, player->pos.z) ? "Соняшниківськ" : "Околиці";
+            if (story_marker(&L.story, &m)) {
+                V3 p = car_idx >= 0 ? cars[car_idx].pos : player->pos;
+                float dx = m.x - p.x, dz = m.z - p.z;
                 hud.marker = 1;
                 hud.marker_dist = sqrtf(dx * dx + dz * dz);
-                hud.marker_angle = -wrapf(atan2f(-dx, -dz) - view_yaw);
+                hud.marker_angle = -wrap_pi(yaw_of(dx, dz) - view_yaw);
             }
             hud_play(&L, &hud);
             break;
@@ -1042,9 +976,7 @@ int main(void)
         r_end_frame();
     }
 
-    worker_drain();
     if (in_game) level_save();
-    world_shutdown();
     audio_stop();
     sceKernelExitGame();
     return 0;
