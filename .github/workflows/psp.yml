@@ -24,7 +24,7 @@ jobs:
         run: make -C psp
       - name: Report size
         run: |
-          ls -l psp/EBOOT.PBP psp/ukrainecraft.prx psp/ukrainecraft.elf
+          ls -l psp/EBOOT.PBP psp/ukrainecraft.elf
           psp-size psp/ukrainecraft.elf
       - uses: actions/upload-artifact@v4
         with:
