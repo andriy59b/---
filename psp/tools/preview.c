@@ -12,6 +12,7 @@
 #include "../src/city.h"
 
 static unsigned int atlas[TEX_SIZE * TEX_SIZE];
+static unsigned int *atlas_mip[4];
 
 static void draw_city(Raster *r, V3 eye, float radius)
 {
@@ -57,6 +58,14 @@ static void shot(const char *dir, const char *name, V3 eye, V3 target)
     Raster r;
     char path[256];
     rs_init(&r, 480 * res_scale, 272 * res_scale, atlas);
+    {
+        /* same texture filtering as the PSP renderer (render.c) */
+        int l;
+        for (l = 0; l < 4; l++) r.mip[l] = atlas_mip[l];
+        r.levels = 4;
+        r.filter = RS_NEAREST_MIPMAP_LINEAR;
+        r.lod_bias = -0.5f;
+    }
     r.fog_start = 90.0f;
     r.fog_end = 180.0f;
     r.fog_color = 0xFFF0D2B0u;
@@ -76,6 +85,11 @@ int main(int argc, char **argv)
     const char *dir = argc > 1 ? argv[1] : ".";
     int i, j, verts = 0;
     texgen_atlas(atlas);
+    atlas_mip[0] = atlas;
+    for (i = 1; i < 4; i++) {
+        atlas_mip[i] = (unsigned int *)malloc((size_t)(TEX_SIZE >> i) * (TEX_SIZE >> i) * 4);
+        texgen_mip(atlas_mip[i - 1], TEX_SIZE >> (i - 1), atlas_mip[i]);
+    }
     city_build(1996);
     for (j = CELL_MIN; j < CELL_MIN + CELLS; j++)
         for (i = CELL_MIN; i < CELL_MIN + CELLS; i++) verts += city_cell(i, j)->solid.n;
@@ -132,6 +146,44 @@ int main(int argc, char **argv)
             res_scale = 1;
         }
         npeds = 0;
+        cars_clear();
+    }
+    /* doors of every car: closed, driver door open, passenger door open, and
+     * the chase camera behind the car while the driver door is open */
+    {
+        int t, k;
+        static const unsigned int PAINT[CAR_TYPES] = { 0xFF3A2414u, 0xFF3A2A9Au, 0xFF9CC4D8u, 0xFF3C5A30u, 0xFF181818u, 0xFFE8E8E8u };
+        npeds = 0;
+        for (t = 0; t < CAR_TYPES; t++) {
+            char name[32];
+            Car *c;
+            cars_clear();
+            k = car_spawn(CK_PARKED, t, v3(410.0f, 0, 8.0f), -PI_F / 2, PAINT[t]);
+            c = &cars[k];
+            res_scale = 2;
+            c->door = 0.0f;
+            snprintf(name, sizeof(name), "cardoor%d_closed", t);
+            shot(dir, name, car_local(c, v3(-4.6f, 1.3f, -0.6f)), car_local(c, v3(0, 0.75f, -0.3f)));
+            c->door = 1.0f;
+            c->door_side = 0;
+            snprintf(name, sizeof(name), "cardoor%d_left", t);
+            shot(dir, name, car_local(c, v3(-3.6f, 1.5f, -3.4f)), car_local(c, v3(0, 0.7f, 0.0f)));
+            /* looking into the opening with Andriy in the driver's seat */
+            npeds = 1;
+            ped_init(&peds[0], CH_ANDRIY, car_seat_point(c), c->yaw);
+            peds[0].anim.sit = 1.0f;
+            peds[0].pos.y = fminf(0.0f, CAR_SPECS[t].height - 0.1f - 1.53f);
+            snprintf(name, sizeof(name), "cardoor%d_inside", t);
+            shot(dir, name, car_local(c, v3(-3.0f, 1.7f, 1.4f)), car_local(c, v3(-0.3f, 0.8f, -0.5f)));
+            npeds = 0;
+            snprintf(name, sizeof(name), "cardoor%d_chase", t);
+            shot(dir, name, car_local(c, v3(-1.6f, 2.3f, 5.2f)), car_local(c, v3(-0.4f, 0.9f, -0.6f)));
+            c->door = 0.6f;
+            c->door_side = 1;
+            snprintf(name, sizeof(name), "cardoor%d_right", t);
+            shot(dir, name, car_local(c, v3(3.6f, 1.5f, -3.4f)), car_local(c, v3(0, 0.7f, 0.0f)));
+            res_scale = 1;
+        }
         cars_clear();
     }
     /* characters: cast line-up */

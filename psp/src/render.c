@@ -18,6 +18,7 @@
 #define FB1_OFF 0x088000
 #define ZB_OFF 0x110000
 #define FAR_PLANE 360.0f
+#define NEAR_PLANE 0.3f
 #define MAX_BATCH 65520 /* vertices per draw call, multiple of 3 */
 
 typedef struct { unsigned int color; float x, y, z; } CVertex;
@@ -29,6 +30,7 @@ typedef struct { unsigned int color; float x, y, z; } CVertex;
 
 static unsigned int __attribute__((aligned(16))) gu_list[512 * 1024];
 #define MIP_LEVELS 4   /* 512, 256, 128, 64 */
+#define TEX_LOD_BIAS (-0.5f)
 static unsigned int *atlas_mip[MIP_LEVELS];
 static unsigned int *font_tex;
 static int bound_tex;
@@ -67,8 +69,13 @@ static void bind_atlas(void)
         sceGuTexMode(GU_PSM_8888, MIP_LEVELS - 1, 0, 1);
         for (l = 0; l < MIP_LEVELS; l++)
             sceGuTexImage(l, TEX_SIZE >> l, TEX_SIZE >> l, TEX_SIZE >> l, atlas_mip[l]);
-        sceGuTexLevelMode(GU_TEXTURE_AUTO, 0.0f);
-        sceGuTexFilter(GU_LINEAR_MIPMAP_LINEAR, GU_NEAREST);
+        /* Each level sampled nearest (crisp pixels, and no bleeding from the
+         * neighbouring atlas tile that bilinear filtering of the small levels
+         * caused: thin lines along every ground quad), blended between levels
+         * so there are no visible bands. Bias -0.5: one step sharper than the
+         * plain choice, which is mush on the ground at grazing angles. */
+        sceGuTexLevelMode(GU_TEXTURE_AUTO, TEX_LOD_BIAS);
+        sceGuTexFilter(GU_NEAREST_MIPMAP_LINEAR, GU_NEAREST);
         sceGuTexFlush();
         bound_tex = 1;
     }
@@ -106,27 +113,18 @@ void r_init(void)
     linear = (unsigned int *)memalign(16, TEX_SIZE * TEX_SIZE * 4);
     texgen_atlas(linear);
     {
+        unsigned int *half = (unsigned int *)memalign(16, (TEX_SIZE / 2) * (TEX_SIZE / 2) * 4);
         int l, size = TEX_SIZE;
         for (l = 0; l < MIP_LEVELS; l++, size >>= 1) {
             if (l > 0) {
-                /* 2x2 box filter of the previous level, in place */
-                int x, y, c, prev = size * 2;
-                for (y = 0; y < size; y++)
-                    for (x = 0; x < size; x++) {
-                        unsigned int out = 0;
-                        for (c = 0; c < 32; c += 8) {
-                            unsigned int sum = ((linear[(2 * y) * prev + 2 * x] >> c) & 0xFF) +
-                                               ((linear[(2 * y) * prev + 2 * x + 1] >> c) & 0xFF) +
-                                               ((linear[(2 * y + 1) * prev + 2 * x] >> c) & 0xFF) +
-                                               ((linear[(2 * y + 1) * prev + 2 * x + 1] >> c) & 0xFF);
-                            out |= ((sum + 2) / 4) << c;
-                        }
-                        linear[y * size + x] = out;
-                    }
+                /* alpha-weighted 2x2 average of the previous level (shared with the PC preview) */
+                texgen_mip(linear, size * 2, half);
+                memcpy(linear, half, (size_t)size * size * 4);
             }
             atlas_mip[l] = (unsigned int *)memalign(16, (size_t)size * size * 4);
             swizzle((unsigned char *)atlas_mip[l], (const unsigned char *)linear, (unsigned int)size * 4, (unsigned int)size);
         }
+        free(half);
     }
     free(linear);
 
@@ -151,8 +149,7 @@ void r_init(void)
     sceGuEnable(GU_CLIP_PLANES);
     sceGuEnable(GU_TEXTURE_2D);
     sceGuTexFunc(GU_TFX_MODULATE, GU_TCC_RGBA);
-    /* sharp pixels up close, smoothed when minified so distant ground does not shimmer */
-    sceGuTexFilter(GU_LINEAR_MIPMAP_LINEAR, GU_NEAREST);
+    sceGuTexFilter(GU_NEAREST_MIPMAP_LINEAR, GU_NEAREST);
     sceGuTexWrap(GU_CLAMP, GU_CLAMP);
     sceGuAlphaFunc(GU_GREATER, 0x80, 0xFF);
     sceGuEnable(GU_ALPHA_TEST);
@@ -183,12 +180,26 @@ void r_end_frame(void)
     sceGuSwapBuffers();
 }
 
+static V3 cam_eye;
+static float cam_fov = 60.0f;
+
+/* near_scale > 1 moves everything drawn after it slightly towards the
+ * camera in depth only (x, y on screen are unchanged): a polygon offset for
+ * decals such as lit windows, which sit a few cm in front of a wall. */
+static void projection(float near_scale)
+{
+    sceGumMatrixMode(GU_PROJECTION);
+    sceGumLoadIdentity();
+    sceGumPerspective(cam_fov, (float)SCR_W / SCR_H, NEAR_PLANE * near_scale, FAR_PLANE);
+    sceGumMatrixMode(GU_MODEL);
+}
+
 void r_camera(V3 eye, float yaw, float pitch, float fov)
 {
     ScePspFVector3 t;
-    sceGumMatrixMode(GU_PROJECTION);
-    sceGumLoadIdentity();
-    sceGumPerspective(fov, (float)SCR_W / SCR_H, 0.3f, FAR_PLANE);
+    cam_eye = eye;
+    cam_fov = fov;
+    projection(1.0f);
     sceGumMatrixMode(GU_VIEW);
     sceGumLoadIdentity();
     sceGumRotateX(-pitch);
@@ -318,6 +329,7 @@ void r_glow(V3 eye, float radius, float night)
     sceGuDepthMask(GU_TRUE);
     /* additive, scaled by how dark it is */
     sceGuBlendFunc(GU_ADD, GU_FIX, GU_FIX, (a << 16) | (a << 8) | a, 0xFFFFFF);
+    projection(1.015f); /* the lit panes are 8 cm in front of the facade */
     for (j = CELL_MIN; j < CELL_MIN + CELLS; j++)
         for (i = CELL_MIN; i < CELL_MIN + CELLS; i++) {
             CityCell *c = city_cell(i, j);
@@ -325,6 +337,7 @@ void r_glow(V3 eye, float radius, float night)
             if (!c->glow.n || dx * dx + dz * dz > (radius + 46.0f) * (radius + 46.0f)) continue;
             draw_verts(c->glow.v, c->glow.n);
         }
+    projection(1.0f);
     sceGuBlendFunc(GU_ADD, GU_SRC_ALPHA, GU_ONE_MINUS_SRC_ALPHA, 0, 0);
     sceGuDepthMask(GU_FALSE);
     sceGuEnable(GU_ALPHA_TEST);
@@ -356,8 +369,14 @@ void r_shadow(V3 p, float hw, float hl, float yaw, float alpha)
     V3 c[4];
     static const int ORDER[6] = { 0, 1, 2, 0, 2, 3 };
     float u[4] = { uv.u0, uv.u0, uv.u1, uv.u1 }, w[4] = { uv.v1, uv.v0, uv.v0, uv.v1 };
-    unsigned int col = ((unsigned int)(clampf(alpha, 0, 1) * 255.0f) << 24) | 0xFFFFFF;
+    float dx = p.x - cam_eye.x, dz = p.z - cam_eye.z, dist = sqrtf(dx * dx + dz * dz);
+    unsigned int col;
     int i;
+    /* a shadow 6 cm above the ground loses the depth test against it far
+     * away (16-bit depth buffer): fade it out instead of letting it flicker */
+    alpha *= clampf((50.0f - dist) / 15.0f, 0.0f, 1.0f);
+    if (alpha <= 0.01f) return;
+    col = ((unsigned int)(clampf(alpha, 0, 1) * 255.0f) << 24) | 0xFFFFFF;
     c[0] = v3_add(p, v3_add(v3_scale(r, -hw), v3_scale(f, -hl)));
     c[1] = v3_add(p, v3_add(v3_scale(r, -hw), v3_scale(f, hl)));
     c[2] = v3_add(p, v3_add(v3_scale(r, hw), v3_scale(f, hl)));
@@ -378,7 +397,9 @@ void r_shadow(V3 p, float hw, float hl, float yaw, float alpha)
     sceGuDisable(GU_ALPHA_TEST);
     sceGuEnable(GU_BLEND);
     sceGuDepthMask(GU_TRUE);
+    projection(1.01f);
     sceGumDrawArray(GU_TRIANGLES, VT_F3D, 6, 0, v);
+    projection(1.0f);
     sceGuDepthMask(GU_FALSE);
     sceGuDisable(GU_BLEND);
     sceGuEnable(GU_ALPHA_TEST);

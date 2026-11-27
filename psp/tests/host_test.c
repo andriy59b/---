@@ -259,6 +259,82 @@ static int inside_car(const Car *c, V3 p)
     return fabsf(v3_dot(d, f)) < CAR_SPECS[c->type].length * 0.5f && fabsf(v3_dot(d, r)) < CAR_SPECS[c->type].width * 0.5f;
 }
 
+/* Number of triangles lying on another triangle facing the same way (closer
+ * than 1 cm): those fight for the depth buffer and flicker. */
+static int coplanar_overlaps(const GMesh *m)
+{
+    int n = m->n / 3, a, b, count = 0;
+    for (a = 0; a < n; a++) {
+        const GVertex *g = &m->v[a * 3];
+        V3 p0 = v3(g[0].x, g[0].y, g[0].z), p1 = v3(g[1].x, g[1].y, g[1].z), p2 = v3(g[2].x, g[2].y, g[2].z);
+        V3 na = v3_cross(v3_sub(p1, p0), v3_sub(p2, p0)), c = v3_scale(v3_add(v3_add(p0, p1), p2), 1.0f / 3.0f);
+        if (v3_len(na) < 1e-6f) continue;
+        na = v3_norm(na);
+        for (b = 0; b < n; b++) {
+            const GVertex *h = &m->v[b * 3];
+            V3 q[3], nb, q2;
+            int i, inside = 1;
+            if (a == b) continue;
+            for (i = 0; i < 3; i++) q[i] = v3(h[i].x, h[i].y, h[i].z);
+            nb = v3_cross(v3_sub(q[1], q[0]), v3_sub(q[2], q[0]));
+            if (v3_len(nb) < 1e-6f) continue;
+            nb = v3_norm(nb);
+            if (fabsf(v3_dot(na, nb)) < 0.999f || fabsf(v3_dot(nb, v3_sub(c, q[0]))) > 0.01f) continue;
+            q2 = v3_sub(c, v3_scale(nb, v3_dot(nb, v3_sub(c, q[0]))));
+            for (i = 0; i < 3; i++)
+                if (v3_dot(v3_cross(v3_sub(q[(i + 1) % 3], q[i]), v3_sub(q2, q[i])), nb) < 1e-5f) inside = 0;
+            if (inside) {
+                if (getenv("UC_DEBUG_OVERLAP"))
+                    printf("  overlap at (%.2f %.2f %.2f) n(%.2f %.2f %.2f)\n", c.x, c.y, c.z, na.x, na.y, na.z);
+                count++;
+                break;
+            }
+        }
+    }
+    return count;
+}
+
+static void test_car_doors(void)
+{
+    int t, side;
+    for (t = 0; t < CAR_TYPES; t++) {
+        const CarSpec *s = &CAR_SPECS[t];
+        GMesh closed, open;
+        int k, i, n_closed;
+        cars_clear();
+        k = car_spawn(CK_PARKED, t, v3(0, 0, 0), 0.0f, 0xFF808080u);
+        gm_init(&closed);
+        car_append_mesh(&closed, &cars[k]);
+        n_closed = closed.n;
+        if (getenv("UC_DEBUG_OVERLAP")) printf("car %d closed\n", t);
+        CHECK(coplanar_overlaps(&closed) == 0);
+        for (side = 0; side < 2; side++) {
+            float hz = -s->length * 0.5f + s->ws_base - 0.05f, moved = 0.0f, maxy = -1.0f;
+            cars[k].door = 1.0f;
+            cars[k].door_side = side;
+            gm_init(&open);
+            car_append_mesh(&open, &cars[k]);
+            CHECK(open.n > n_closed); /* trim and cabin added */
+            if (getenv("UC_DEBUG_OVERLAP")) printf("car %d open %d\n", t, side);
+            CHECK(coplanar_overlaps(&open) == 0);
+            for (i = 0; i < open.n; i++) {
+                const GVertex *g = &open.v[i];
+                /* nothing but the open door sticks out of the body's side */
+                if (fabsf(g->x) > s->width * 0.5f + 0.06f) {
+                    CHECK((side ? g->x > 0 : g->x < 0) && g->z > hz - 0.2f && g->z < hz + 1.6f);
+                    moved = fmaxf(moved, fabsf(g->x) - s->width * 0.5f);
+                }
+                maxy = fmaxf(maxy, g->y);
+            }
+            CHECK(maxy <= cars[k].pos.y + s->height + cars[k].body_y + 0.01f);
+            CHECK(moved > 0.8f); /* the door swung well out */
+            gm_free(&open);
+        }
+        gm_free(&closed);
+    }
+    cars_clear();
+}
+
 static void test_ride(void)
 {
     int side, k, i, ev, all = 0, state_seen[RIDE_EXIT_CLOSE + 1] = { 0 }, inside_walk = 0;
@@ -433,6 +509,7 @@ int main(void)
     test_traffic();
     test_actor();
     test_ride();
+    test_car_doors();
     test_cutscenes_and_story();
     test_audio();
     CHECK(cs_line_time("Тихо.") > 1.0f && cs_line_time("Мені такі люди потрібні. Робота чиста, гроші — в доларах.") > 3.5f);

@@ -15,7 +15,15 @@ typedef struct {
     float fog_start, fog_end;
     unsigned int fog_color;
     int blend;           /* 1: alpha blend instead of alpha test */
+    /* texture filtering, mirroring the PSP GE: level 0 is tex */
+    const unsigned int *mip[8];
+    int levels;          /* 1 = no mipmaps */
+    int filter;          /* RS_FILTER_* used when minified */
+    float lod_bias;
+    float near_z;        /* near clip distance (default 0.1) */
 } Raster;
+
+enum { RS_NEAREST = 0, RS_LINEAR_MIPMAP_LINEAR, RS_NEAREST_MIPMAP_LINEAR, RS_NEAREST_MIPMAP_NEAREST };
 
 void rs_init(Raster *r, int w, int h, const unsigned int *atlas);
 void rs_free(Raster *r);

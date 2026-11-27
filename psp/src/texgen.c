@@ -755,15 +755,16 @@ static void t_window_lit(void)
 
 /* --------------------------------------------------------------- cars */
 
+/* Columns 0..47: plain body side (stretched along the car); columns 48..63:
+ * one door panel with its seams and handle, mapped onto each real door. */
 static void t_car_side(void)
 {
     int x;
     grain(0, 0, 63, 63, C(242, 242, 242), 0.05f, 95, 4);
     rect(0, 26, 63, 26, C(150, 150, 150));     /* waist line */
-    rect(22, 6, 22, 60, C(130, 130, 130));     /* door seams */
-    rect(44, 6, 44, 60, C(130, 130, 130));
-    rect(28, 30, 33, 31, C(110, 110, 110));    /* handles */
-    rect(50, 30, 55, 31, C(110, 110, 110));
+    rect(48, 2, 48, 60, C(120, 120, 120));     /* door seams */
+    rect(63, 2, 63, 60, C(120, 120, 120));
+    rect(56, 30, 60, 31, C(110, 110, 110));    /* handle, at the rear edge */
     rect(0, 50, 63, 53, C(60, 60, 60));        /* rubbing strip */
     for (x = 0; x < 64; x++) px(x, 0, C(255, 255, 255));
 }
@@ -1174,4 +1175,35 @@ void texgen_atlas(unsigned int *atlas)
         default: break;
         }
     }
+}
+
+/* Next mip level (half size) of the atlas. Colours are averaged weighted by
+ * alpha, so cut-out sprites (trees, fences) do not get dark fringes from the
+ * transparent black around them. Tiles stay separate at every level since
+ * TEX_TILE is a multiple of 2^levels. */
+void texgen_mip(const unsigned int *src, int src_size, unsigned int *dst)
+{
+    int size = src_size / 2, x, y, k;
+    for (y = 0; y < size; y++)
+        for (x = 0; x < size; x++) {
+            unsigned int px[4], wsum = 0, c[3] = { 0, 0, 0 }, a = 0;
+            px[0] = src[(2 * y) * src_size + 2 * x];
+            px[1] = src[(2 * y) * src_size + 2 * x + 1];
+            px[2] = src[(2 * y + 1) * src_size + 2 * x];
+            px[3] = src[(2 * y + 1) * src_size + 2 * x + 1];
+            for (k = 0; k < 4; k++) {
+                unsigned int al = px[k] >> 24;
+                a += al;
+                wsum += al;
+                c[0] += (px[k] & 0xFF) * al;
+                c[1] += ((px[k] >> 8) & 0xFF) * al;
+                c[2] += ((px[k] >> 16) & 0xFF) * al;
+            }
+            if (wsum) {
+                for (k = 0; k < 3; k++) c[k] = (c[k] + wsum / 2) / wsum;
+            }
+            /* keep cut-outs solid while at least half the texels are opaque */
+            a = (a + 2) / 4;
+            dst[y * size + x] = (a << 24) | (c[2] << 16) | (c[1] << 8) | c[0];
+        }
 }

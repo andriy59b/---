@@ -32,6 +32,7 @@ enum { FACE_ANDRIY = 0, FACE_TARAS, FACE_GALYA, FACE_KABAN, FACE_SELLER, FACE_TH
 UVRect uv_face(int face, int mouth_open);
 
 void texgen_atlas(unsigned int *atlas);   /* TEX_SIZE x TEX_SIZE, ABGR */
+void texgen_mip(const unsigned int *src, int src_size, unsigned int *dst); /* half-size level */
 
 #define FONT_TEX_W 128
 #define FONT_TEX_H 64

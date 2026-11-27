@@ -6,6 +6,14 @@
 #define T_OPEN 0.7f
 #define T_IN 0.75f
 #define T_SLIDE 0.55f   /* extra time to slide across from the passenger seat */
+#define SIT_HEAD 1.53f  /* top of the head above the feet when sitting */
+
+/* Car seats are lower than chairs: sink so the head stays under the roof */
+static float seat_drop(const Car *c)
+{
+    float d = CAR_SPECS[c->type].height - 0.1f - SIT_HEAD;
+    return d < 0.0f ? d : 0.0f;
+}
 #define T_CLOSE 0.4f
 #define T_EXIT_OPEN 0.45f
 #define T_EXIT_OUT 0.6f
@@ -138,6 +146,7 @@ int ride_update(Ride *r, Ped *p, float dt)
         p->anim.crouch = 0.75f * sinf(clampf(r->t / T_IN, 0.0f, 1.0f) * PI_F);
         p->anim.sit = smooth01((r->t - T_IN * 0.4f) / (T_IN * 0.6f));
         p->pos = v3_lerp(door, seat, smooth01(k));
+        p->pos.y += seat_drop(c) * p->anim.sit;
         p->yaw = wrap_pi(p->yaw + wrap_pi(c->yaw - p->yaw) * clampf(dt * 5.0f, 0.0f, 1.0f));
         if (k >= 1.0f) {
             p->active = 0;
@@ -165,6 +174,7 @@ int ride_update(Ride *r, Ped *p, float dt)
         if (r->t >= T_EXIT_OPEN) {
             p->active = 1;
             p->pos = car_seat_point(c);
+            p->pos.y += seat_drop(c);
             p->yaw = c->yaw;
             p->vel = v3(0, 0, 0);
             r->state = RIDE_EXIT_OUT;
@@ -180,6 +190,7 @@ int ride_update(Ride *r, Ped *p, float dt)
         p->yaw = wrap_pi(c->yaw + wrap_pi(out_yaw - c->yaw) * smooth01(k));
         p->anim.sit = 1.0f - smooth01(k * 1.4f);
         p->anim.crouch = 0.7f * sinf(k * PI_F);
+        p->pos.y += seat_drop(c) * p->anim.sit;
         if (k >= 1.0f) {
             p->anim.sit = 0.0f;
             p->anim.crouch = 0.0f;

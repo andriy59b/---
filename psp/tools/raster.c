@@ -16,6 +16,9 @@ void rs_init(Raster *r, int w, int h, const unsigned int *atlas)
     r->fov = 70.0f;
     r->fog_start = 1e9f;
     r->fog_end = 2e9f;
+    r->mip[0] = atlas;
+    r->levels = 1;
+    r->near_z = 0.1f;
 }
 
 void rs_free(Raster *r)
@@ -62,7 +65,59 @@ void rs_look_at(Raster *r, V3 eye, V3 target, float fov)
     rs_camera(r, eye, yaw_of(d.x, d.z), atan2f(d.y, hz), fov);
 }
 
-typedef struct { float x, y, z, u, v; float c[4]; } PV; /* view space */
+typedef struct { float x, y, z, u, v; float c[4]; } PV;
+
+static void texel(const Raster *r, int l, int tx, int ty, float out[4])
+{
+    int size = TEX_SIZE >> l;
+    unsigned int t;
+    tx = tx < 0 ? 0 : (tx >= size ? size - 1 : tx);
+    ty = ty < 0 ? 0 : (ty >= size ? size - 1 : ty);
+    t = r->mip[l][ty * size + tx];
+    out[0] = (t & 0xFF) / 255.0f;
+    out[1] = ((t >> 8) & 0xFF) / 255.0f;
+    out[2] = ((t >> 16) & 0xFF) / 255.0f;
+    out[3] = ((t >> 24) & 0xFF) / 255.0f;
+}
+
+static void sample_level(const Raster *r, int l, float u, float v, int linear, float out[4])
+{
+    int size = TEX_SIZE >> l, k;
+    if (!linear) {
+        texel(r, l, (int)floorf(u * size), (int)floorf(v * size), out);
+        return;
+    } else {
+        float fx = u * size - 0.5f, fy = v * size - 0.5f, a[4], b[4], c[4], d[4];
+        int x0 = (int)floorf(fx), y0 = (int)floorf(fy);
+        float tx = fx - x0, ty = fy - y0;
+        texel(r, l, x0, y0, a);
+        texel(r, l, x0 + 1, y0, b);
+        texel(r, l, x0, y0 + 1, c);
+        texel(r, l, x0 + 1, y0 + 1, d);
+        for (k = 0; k < 4; k++) out[k] = (a[k] * (1 - tx) + b[k] * tx) * (1 - ty) + (c[k] * (1 - tx) + d[k] * tx) * ty;
+    }
+}
+
+/* lod = log2 of the texel footprint of one pixel at level 0 */
+static void sample(const Raster *r, float u, float v, float lod, float out[4])
+{
+    int k;
+    lod += r->lod_bias;
+    if (r->filter == RS_NEAREST || r->levels <= 1 || lod <= 0.0f) {
+        sample_level(r, 0, u, v, r->filter == RS_LINEAR_MIPMAP_LINEAR && lod > 0.0f, out);
+        return;
+    }
+    if (lod > r->levels - 1) lod = (float)(r->levels - 1);
+    if (r->filter == RS_NEAREST_MIPMAP_NEAREST) {
+        sample_level(r, (int)(lod + 0.5f), u, v, 0, out);
+    } else {
+        int l0 = (int)lod, l1 = l0 + 1 < r->levels ? l0 + 1 : l0, lin = r->filter == RS_LINEAR_MIPMAP_LINEAR;
+        float t = lod - l0, a[4], b[4];
+        sample_level(r, l0, u, v, lin, a);
+        sample_level(r, l1, u, v, lin, b);
+        for (k = 0; k < 4; k++) out[k] = a[k] + (b[k] - a[k]) * t;
+    }
+} /* view space */
 
 static PV to_view(const Raster *r, const GVertex *g)
 {
@@ -128,7 +183,7 @@ static void raster_tri(Raster *r, const PV *a, const PV *b, const PV *c)
             float w1 = ((sx[2] - px) * (sy[0] - py) - (sx[0] - px) * (sy[2] - py)) / area;
             float w2 = 1.0f - w0 - w1, z, u, v, col[4], depth;
             unsigned int t, out;
-            int k, tx, ty;
+            int k;
             if (w0 < 0 || w1 < 0 || w2 < 0) continue;
             z = w0 * iz[0] + w1 * iz[1] + w2 * iz[2];
             depth = 1.0f / z;
@@ -137,9 +192,26 @@ static void raster_tri(Raster *r, const PV *a, const PV *b, const PV *c)
             v = (w0 * p[0]->v * iz[0] + w1 * p[1]->v * iz[1] + w2 * p[2]->v * iz[2]) / z;
             for (k = 0; k < 4; k++)
                 col[k] = (w0 * p[0]->c[k] * iz[0] + w1 * p[1]->c[k] * iz[1] + w2 * p[2]->c[k] * iz[2]) / z;
-            tx = (int)(u * TEX_SIZE) & (TEX_SIZE - 1);
-            ty = (int)(v * TEX_SIZE) & (TEX_SIZE - 1);
-            t = r->tex[ty * TEX_SIZE + tx];
+            {
+                /* texture footprint from the screen-space derivatives of u, v */
+                float lod = 0.0f, tc[4];
+                if (r->levels > 1 || r->filter != RS_NEAREST) {
+                    float dw0x = -(sy[2] - sy[1]) / area, dw1x = -(sy[0] - sy[2]) / area;
+                    float dw0y = (sx[2] - sx[1]) / area, dw1y = (sx[0] - sx[2]) / area, du[2], dv[2], m;
+                    int s2;
+                    for (s2 = 0; s2 < 2; s2++) {
+                        float a0 = w0 + (s2 ? dw0y : dw0x), a1 = w1 + (s2 ? dw1y : dw1x), a2 = 1.0f - a0 - a1;
+                        float zz = a0 * iz[0] + a1 * iz[1] + a2 * iz[2];
+                        du[s2] = (a0 * p[0]->u * iz[0] + a1 * p[1]->u * iz[1] + a2 * p[2]->u * iz[2]) / zz - u;
+                        dv[s2] = (a0 * p[0]->v * iz[0] + a1 * p[1]->v * iz[1] + a2 * p[2]->v * iz[2]) / zz - v;
+                    }
+                    m = fmaxf(du[0] * du[0] + dv[0] * dv[0], du[1] * du[1] + dv[1] * dv[1]);
+                    lod = 0.5f * log2f(m * TEX_SIZE * TEX_SIZE + 1e-20f);
+                }
+                sample(r, u, v, lod, tc);
+                t = ((unsigned int)(tc[3] * 255.0f + 0.5f) << 24) | ((unsigned int)(tc[2] * 255.0f + 0.5f) << 16) |
+                    ((unsigned int)(tc[1] * 255.0f + 0.5f) << 8) | (unsigned int)(tc[0] * 255.0f + 0.5f);
+            }
             {
                 float tr = (t & 0xFF) / 255.0f * col[0], tg = ((t >> 8) & 0xFF) / 255.0f * col[1];
                 float tb = ((t >> 16) & 0xFF) / 255.0f * col[2], ta = ((t >> 24) & 0xFF) / 255.0f * col[3];
@@ -166,7 +238,7 @@ static void raster_tri(Raster *r, const PV *a, const PV *b, const PV *c)
 
 void rs_draw(Raster *r, const GVertex *v, int n)
 {
-    const float nearz = -0.1f;
+    const float nearz = -r->near_z;
     int t;
     for (t = 0; t + 2 < n; t += 3) {
         PV in[3], out[4];

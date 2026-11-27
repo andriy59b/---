@@ -318,8 +318,8 @@ static void block_of_flats(float x0, float z0, float x1, float z1, int floors, P
     /* parapet and a lift room on the roof */
     box(x0, H, z0, x1, H + 0.5f, z0 + 0.25f, T_CONCRETE, T_CONCRETE, WHITE, 0);
     box(x0, H, z1 - 0.25f, x1, H + 0.5f, z1, T_CONCRETE, T_CONCRETE, WHITE, 0);
-    box(x0, H, z0, x0 + 0.25f, H + 0.5f, z1, T_CONCRETE, T_CONCRETE, WHITE, 0);
-    box(x1 - 0.25f, H, z0, x1, H + 0.5f, z1, T_CONCRETE, T_CONCRETE, WHITE, 0);
+    box(x0, H, z0 + 0.25f, x0 + 0.25f, H + 0.5f, z1 - 0.25f, T_CONCRETE, T_CONCRETE, WHITE, 0); /* no overlap at the corners */
+    box(x1 - 0.25f, H, z0 + 0.25f, x1, H + 0.5f, z1 - 0.25f, T_CONCRETE, T_CONCRETE, WHITE, 0);
     box((x0 + x1) / 2 - 1.5f, H, (z0 + z1) / 2 - 1.5f, (x0 + x1) / 2 + 1.5f, H + 2.5f, (z0 + z1) / 2 + 1.5f,
         T_PANEL_BLANK, T_ROOF_FLAT, WHITE, 0);
     add_box(x0, 0.0f, z0, x1, H, z1);
@@ -375,8 +375,9 @@ static void fence(float ax, float az, float bx, float bz)
         float x0 = ax + (bx - ax) * t / len, z0 = az + (bz - az) * t / len;
         float x1 = ax + (bx - ax) * t1 / len, z1 = az + (bz - az) * t1 / len;
         UVRect uv = uv_sub(T_FENCE, 0, 0, (int)(64 * (t1 - t) / 4.0f), 64);
+        /* one quad, seen from both sides (no face culling): a back-to-back
+         * pair in the same plane fights for the depth buffer and flickers */
         vquad(x0, z0, x1, z1, WALK_H, WALK_H + 1.5f, uv, WHITE);
-        vquad(x1, z1, x0, z0, WALK_H, WALK_H + 1.5f, uv, WHITE);
     }
     add_box(ax < bx ? ax : bx, 0, az < bz ? az : bz, (ax > bx ? ax : bx) + 0.05f, WALK_H + 1.5f, (az > bz ? az : bz) + 0.05f);
 }
@@ -423,11 +424,9 @@ static void bench(float x, float z, int along_x)
     float w = 1.8f;
     if (along_x) {
         vquad(x - w / 2, z, x + w / 2, z, WALK_H, WALK_H + 1.0f, uv, WHITE);
-        vquad(x + w / 2, z, x - w / 2, z, WALK_H, WALK_H + 1.0f, uv, WHITE);
         add_box(x - w / 2, 0, z - 0.3f, x + w / 2, WALK_H + 0.5f, z + 0.3f);
     } else {
         vquad(x, z + w / 2, x, z - w / 2, WALK_H, WALK_H + 1.0f, uv, WHITE);
-        vquad(x, z - w / 2, x, z + w / 2, WALK_H, WALK_H + 1.0f, uv, WHITE);
         add_box(x - 0.3f, 0, z - w / 2, x + 0.3f, WALK_H + 0.5f, z + w / 2);
     }
 }
@@ -601,7 +600,9 @@ static void lot_garages(float ox, float oz)
         for (r = 0; r < 2; r++) {
             float z0 = oz + 24 + r * 6, z1 = z0 + 6;
             unsigned int tint = gfx_mul(WHITE, 0.85f + 0.15f * hf(k, r, 9));
-            gm_box(M, v3(x, WALK_H, z0), v3(x + 4, WALK_H + 2.6f, z1), uv_tile(T_METAL), uv_tile(T_METAL), tint, 4 | 1 | 2);
+            /* side walls only at the ends of the row: neighbours share them */
+            gm_box(M, v3(x, WALK_H, z0), v3(x + 4, WALK_H + 2.6f, z1), uv_tile(T_METAL), uv_tile(T_METAL), tint,
+                   4 | (x + 4.0f > ox + 60 - 0.1f ? 1 : 0) | (k == 0 ? 2 : 0));
             if (r == 0) vquad(x + 4, z0, x, z0, WALK_H, WALK_H + 2.6f, uv_tile(T_GARAGE_DOOR), tint);
             else vquad(x, z1, x + 4, z1, WALK_H, WALK_H + 2.6f, uv_tile(T_GARAGE_DOOR), tint);
         }
@@ -672,9 +673,8 @@ static void highway(float x0, float x1, float oz)
         ground(x, oz + 5.5f, x + 4, oz + 10.5f, 0.0f, T_ROAD_LINE, 0, WHITE);
         ground(x, oz + 10.5f, x + 4, oz + 13, 0.0f, T_ASPHALT, 0, WHITE);
         /* guardrails (vidbiynyky) on both sides */
+        /* single-sided rails lit as facing the road */
         vquad(x, oz + 2.4f, x + 4, oz + 2.4f, 0.0f, 0.9f, uv_tile(T_GUARDRAIL), WHITE);
-        vquad(x + 4, oz + 2.4f, x, oz + 2.4f, 0.0f, 0.9f, uv_tile(T_GUARDRAIL), WHITE);
-        vquad(x, oz + 13.6f, x + 4, oz + 13.6f, 0.0f, 0.9f, uv_tile(T_GUARDRAIL), WHITE);
         vquad(x + 4, oz + 13.6f, x, oz + 13.6f, 0.0f, 0.9f, uv_tile(T_GUARDRAIL), WHITE);
     }
     add_box(x0, 0, oz + 2.3f, x1, 0.9f, oz + 2.5f);
