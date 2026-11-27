@@ -20,7 +20,6 @@
 #include "render.h"
 #include "story.h"
 #include "synth.h"
-#include "voice.h"
 
 PSP_MODULE_INFO("UkraineCraft", 0, 1, 2);
 PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER | THREAD_ATTR_VFPU);
@@ -68,8 +67,6 @@ static float radio_timer;
 static char radio_buf[96];
 
 static GMesh dyn;
-static short *voice_bufs[2];
-static int voice_buf_i;
 
 /* ------------------------------------------------------------- callbacks */
 
@@ -135,35 +132,7 @@ static void show_banner(const char *text, const char *sub, float t)
 static void apply_volumes(void)
 {
     synth_volumes(L.music_vol / 10.0f, L.sfx_vol / 10.0f);
-    voice_volume(L.voice_vol / 10.0f);
 }
-
-/* ------------------------------------------------------------------ voices */
-
-static void cs_say(int actor, const char *text, const char *id)
-{
-    char path[96];
-    short *buf = NULL;
-    int n = 0, rate = 0, who;
-    if (actor < 0 || !text) {
-        voice_stop();
-        return;
-    }
-    who = peds[actor].who;
-    snprintf(path, sizeof(path), VOICE_DIR "/%s.wav", id ? id : "none");
-    /* the buffer from two lines ago is certainly no longer playing */
-    voice_buf_i ^= 1;
-    free(voice_bufs[voice_buf_i]);
-    voice_bufs[voice_buf_i] = NULL;
-    if (wav_load(path, &buf, &n, &rate)) {
-        voice_bufs[voice_buf_i] = buf;
-        voice_play_pcm(buf, n, rate);
-    } else {
-        voice_say(text, LOOKS[who].voice_pitch, LOOKS[who].voice_formant);
-    }
-}
-
-static int cs_speaking(void) { return voice_busy(); }
 
 static CsIO cs_io(void)
 {
@@ -171,8 +140,6 @@ static CsIO cs_io(void)
     int i;
     memset(&io, 0, sizeof(io));
     for (i = 0; i < N_ACTORS; i++) io.actors[i] = &peds[i];
-    io.say = cs_say;
-    io.speaking = cs_speaking;
     return io;
 }
 
@@ -211,7 +178,6 @@ static void level_defaults(void)
     L.day_cycle = 1;
     L.music_vol = 7;
     L.sfx_vol = 9;
-    L.voice_vol = 10;
     L.has_car = 1;
     L.car_pos = POI_CAR;
     L.car_yaw = POI_CAR_YAW;
@@ -427,8 +393,10 @@ static void car_transition_tick(float dt)
         }
         break;
     case P_ENTER_OPEN:
-        c->door = clampf(pstate_t / 0.35f, 0.0f, 1.0f);
-        if (pstate_t >= 0.35f) {
+        /* reach for the handle, then pull the door open */
+        player->anim.gesture = pstate_t < 0.55f ? GEST_POINT : GEST_NONE;
+        c->door = smooth01((pstate_t - 0.25f) / 0.45f);
+        if (pstate_t >= 0.7f) {
             if (c->kind == CK_SCRIPT && !c->own && c->type != CAR_GELENDER) {
                 flee_driver(car_local(c, v3(-CAR_SPECS[c->type].width * 0.5f - 1.2f, 0, -0.3f)), c->yaw + PI_F / 2);
                 show_banner("Водій утік!", NULL, 2.0f);
@@ -438,8 +406,10 @@ static void car_transition_tick(float dt)
         }
         break;
     case P_ENTER_IN: {
-        float k = clampf(pstate_t / 0.45f, 0.0f, 1.0f);
-        player->anim.crouch = 0.6f * sinf(k * PI_F);
+        /* duck and slide into the seat */
+        float k = clampf(pstate_t / 0.7f, 0.0f, 1.0f);
+        player->anim.crouch = 0.7f * sinf(k * PI_F);
+        player->anim.sit = smooth01((k - 0.4f) / 0.6f);
         player->pos = v3_lerp(car_door_point(c), car_seat_point(c), smooth01(k));
         if (k >= 1.0f) {
             player->active = 0;
@@ -449,24 +419,27 @@ static void car_transition_tick(float dt)
         break;
     }
     case P_ENTER_CLOSE:
-        c->door = 1.0f - clampf(pstate_t / 0.3f, 0.0f, 1.0f);
-        if (pstate_t >= 0.3f) {
+        c->door = 1.0f - smooth01(pstate_t / 0.4f);
+        if (pstate_t >= 0.4f) {
             c->kind = CK_PLAYER;
             c->door = 0.0f;
+            player->anim.gesture = GEST_NONE;
             pstate = P_DRIVE;
             synth_sfx(SFX_DOOR);
             radio_play();
         }
         break;
     case P_EXIT_OPEN:
-        c->door = clampf(pstate_t / 0.3f, 0.0f, 1.0f);
+        c->door = smooth01(pstate_t / 0.45f);
         car_step(c, dt);
-        if (pstate_t >= 0.3f) {
+        if (pstate_t >= 0.45f) {
             V3 r = yaw_right(c->yaw);
             player->active = 1;
             player->pos = car_door_point(c);
             player->yaw = yaw_of(-r.x, -r.z);
             player->anim.crouch = 0.4f;
+            player->anim.sit = 0.0f;
+            player->anim.gesture = GEST_NONE;
             player->vel = v3(0, 0, 0);
             c->kind = CK_PARKED;
             pstate = P_EXIT_CLOSE;
@@ -476,8 +449,10 @@ static void car_transition_tick(float dt)
         }
         break;
     case P_EXIT_CLOSE:
-        c->door = 1.0f - clampf(pstate_t / 0.35f, 0.0f, 1.0f);
-        if (pstate_t >= 0.35f) {
+        /* step away, then shut the door */
+        c->door = pstate_t < 0.3f ? 1.0f : 1.0f - smooth01((pstate_t - 0.3f) / 0.4f);
+        player->anim.gesture = pstate_t > 0.25f && pstate_t < 0.5f ? GEST_POINT : GEST_NONE;
+        if (pstate_t >= 0.7f) {
             c->door = 0.0f;
             synth_sfx(SFX_DOOR);
             car_idx = -1;
@@ -518,7 +493,6 @@ static void finish_cutscene(void)
     int ch = car_find_kind(CK_SCRIPT);
     int id = cs.id;
     (void)ch;
-    voice_stop();
     if (id == CS_KIOSK) {
         int i;
         for (i = 0; i < MAX_CARS; i++)
@@ -700,7 +674,6 @@ int main(void)
                 L.look_speed = keep.look_speed;
                 L.music_vol = keep.music_vol;
                 L.sfx_vol = keep.sfx_vol;
-                L.voice_vol = keep.voice_vol;
                 remove(LEVEL_FILE);
                 has_save = 0;
                 begin_session();
@@ -718,7 +691,6 @@ int main(void)
                 case SET_LOOK:   L.look_speed = L.look_speed + d < 1 ? 5 : (L.look_speed + d > 5 ? 1 : L.look_speed + d); break;
                 case SET_MUSIC:  L.music_vol = (int)clampf((float)(L.music_vol + d), 0, 10); apply_volumes(); break;
                 case SET_SFX:    L.sfx_vol = (int)clampf((float)(L.sfx_vol + d), 0, 10); apply_volumes(); break;
-                case SET_VOICE:  L.voice_vol = (int)clampf((float)(L.voice_vol + d), 0, 10); apply_volumes(); break;
                 case SET_CYCLE:  L.day_cycle = !L.day_cycle; break;
                 case SET_TIME:   L.time = (L.time > 0.02f && L.time < 0.48f) ? 0.55f : 0.1f; break;
                 case SET_INFO:   L.show_info = !L.show_info; break;
@@ -858,11 +830,7 @@ int main(void)
             cs_update(&cs, &io, dt, (pressed & PSP_CTRL_CROSS) != 0, (pressed & PSP_CTRL_START) != 0);
             handle_requests(cs.requests);
             for (i = 0; i < N_ACTORS; i++)
-                if (peds[i].active) {
-                    if (i == cs.speaker) peds[i].anim.mouth = clampf(voice_level() * 1.6f, 0.0f, 1.0f);
-                    else peds[i].anim.mouth = 0.0f;
-                    ped_update(&peds[i], v3(0, 0, 0), 0, 0, dt);
-                }
+                if (peds[i].active) ped_update(&peds[i], v3(0, 0, 0), 0, 0, dt);
             cars_update(dt, player->pos, &player->pos, 0);
             if (!cs.running) finish_cutscene();
         }

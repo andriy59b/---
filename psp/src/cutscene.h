@@ -1,5 +1,5 @@
 /* Scripted cutscenes: camera shots and moves, actors walking, facing and
- * gesturing, voiced subtitles, fades and titles. */
+ * gesturing, subtitles, fades and titles. */
 #ifndef UC_CUTSCENE_H
 #define UC_CUTSCENE_H
 
@@ -40,14 +40,10 @@ typedef struct {
     const char *title, *title2;
     float title_t;
     int requests;    /* CS_REQ_* bits raised this frame */
-    char voice_id[24];
 } Cutscene;
 
 typedef struct {
     Ped *actors[N_ACTORS];
-    /* starts a voiced line; voice_id names an optional voice/<id>.wav */
-    void (*say)(int actor, const char *text, const char *voice_id);
-    int (*speaking)(void);
 } CsIO;
 
 void cs_start(Cutscene *c, int id);
@@ -55,5 +51,6 @@ void cs_start(Cutscene *c, int id);
 void cs_update(Cutscene *c, const CsIO *io, float dt, int advance, int skip);
 void cs_camera(const Cutscene *c, const CsIO *io, V3 *eye, V3 *target);
 const char *cs_speaker_name(int actor);
+float cs_line_time(const char *text);   /* how long a subtitle stays */
 
 #endif

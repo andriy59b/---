@@ -5,7 +5,6 @@
 
 #include "raster.h"
 #include "../src/city.h"
-#include "../src/voice.h"
 #include "../src/texgen.h"
 #include "../src/car.h"
 #include "../src/actor.h"
@@ -39,7 +38,7 @@ static void draw_cars(Raster *r)
 
 static Ped peds[16];
 static Cutscene *cur_cs;
-static int fake_speaking(void) { return cur_cs && cur_cs->sub_text && cur_cs->sub_t < voice_duration(cur_cs->sub_text); }
+
 static int res_scale = 1;
 static int npeds;
 
@@ -113,6 +112,26 @@ int main(int argc, char **argv)
     shot(dir, "highway", v3(300.0f, 1.6f, 10.5f), v3(400.0f, 0.5f, 10.5f));
     shot(dir, "kiosk", v3(128 + 37.2f, 1.7f, -128 + 30.0f), v3(128 + 37.2f, 2.6f, -128 + 36.0f));
     shot(dir, "houses", v3(-256 + 40.0f, 1.7f, -256 + 8.0f), v3(-256 + 40.0f, 2.0f, -256 + 40.0f));
+    /* getting into a car: door half open with Andriy reaching, door fully open with Andriy ducking */
+    {
+        int k, d;
+        for (d = 0; d < 2; d++) {
+            char name[32];
+            cars_clear();
+            k = car_spawn(CK_PARKED, CAR_KLASYKA, v3(410.0f, 0, 8.0f), -PI_F / 2, 0xFF3A2A9Au);
+            cars[k].door = d ? 1.0f : 0.5f;
+            npeds = 1;
+            ped_init(&peds[0], CH_ANDRIY, car_door_point(&cars[k]), yaw_of(yaw_right(cars[k].yaw).x, yaw_right(cars[k].yaw).z));
+            if (d) { peds[0].anim.crouch = 0.6f; peds[0].anim.sit = 0.3f; peds[0].pos = v3_lerp(car_door_point(&cars[k]), car_seat_point(&cars[k]), 0.4f); }
+            else { peds[0].anim.gesture = GEST_POINT; peds[0].anim.gesture_w = 1.0f; }
+            snprintf(name, sizeof(name), "door%d", d);
+            res_scale = 2;
+            shot(dir, name, v3(407.0f, 1.8f, 3.2f), v3(410.0f, 0.9f, 7.0f));
+            res_scale = 1;
+        }
+        npeds = 0;
+        cars_clear();
+    }
     /* characters: cast line-up */
     cars_clear();
     npeds = 0;
@@ -181,7 +200,6 @@ int main(int argc, char **argv)
             CsIO io;
             int f, shotn = 0, a;
             memset(&io, 0, sizeof(io));
-            io.speaking = fake_speaking;
             cur_cs = &cs;
             cars_clear();
             car_spawn(CK_PARKED, CAR_LASTIVKA, POI_CAR, POI_CAR_YAW, 0xFF3A2A9Au);
@@ -199,10 +217,7 @@ int main(int argc, char **argv)
             for (f = 0; f < 60 * 120 && cs.running; f++) {
                 int adv = 0;
                 cs_update(&cs, &io, 1.0f / 60, adv, 0);
-                for (a = 0; a < N_ACTORS; a++) {
-                    peds[a].anim.mouth = (a == cs.speaker) ? 0.5f + 0.5f * sinf(f * 0.4f) : 0.0f;
-                    ped_update(&peds[a], v3(0, 0, 0), 0, 0, 1.0f / 60);
-                }
+                for (a = 0; a < N_ACTORS; a++) ped_update(&peds[a], v3(0, 0, 0), 0, 0, 1.0f / 60);
                 if ((f % 170) == 90 && shotn < 6 && cs.running) {
                     V3 eye, tgt;
                     char name[32];

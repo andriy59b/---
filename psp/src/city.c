@@ -495,14 +495,43 @@ static void intersection(float ox, float oz)
     vquad(ox + 13, oz + 16, ox + 13, oz + 13, 0, WALK_H, uv_sub(T_CURB, 0, 0, 48, 16), WHITE);
 }
 
+/* Lot ground as 4 m cells, one surface each: no overlapping decals (they
+ * flicker with the PSP's 16-bit depth buffer) and small triangles near the camera. */
+typedef int (*GroundFn)(float u, float v, int li, int lj);
+
+static void lot_ground(float ox, float oz, GroundFn fn, int li, int lj)
+{
+    float u, v;
+    for (v = 16.0f; v < 64.0f; v += 4.0f)
+        for (u = 16.0f; u < 64.0f; u += 4.0f)
+            ground(ox + u, oz + v, ox + u + 4.0f, oz + v + 4.0f, WALK_H, fn(u + 2.0f, v + 2.0f, li, lj), 0, WHITE);
+}
+
+static int in(float a, float lo, float hi) { return a >= lo && a < hi; }
+
+static int g_panel5(float u, float v, int li, int lj) { (void)li; (void)lj; return in(u, 24, 28) && v >= 40 ? T_SIDEWALK : T_YARD; }
+static int g_panel9(float u, float v, int li, int lj) { (void)li; (void)lj; return in(u, 32, 44) && in(v, 44, 56) ? T_DIRT : T_YARD; }
+static int g_school(float u, float v, int li, int lj) { (void)li; (void)lj; return in(u, 24, 56) && in(v, 44, 60) ? T_DIRT : T_GRASS; }
+static int g_concrete(float u, float v, int li, int lj) { (void)u; (void)v; (void)li; (void)lj; return T_CONCRETE; }
+static int g_market(float u, float v, int li, int lj) { (void)u; (void)v; (void)li; (void)lj; return T_SIDEWALK; }
+static int g_kiosk(float u, float v, int li, int lj) { (void)li; (void)lj; return in(u, 28, 52) && in(v, 24, 48) ? T_SIDEWALK : T_GRASS; }
+static int g_park(float u, float v, int li, int lj) { (void)li; (void)lj; return in(u, 36, 40) || in(v, 36, 40) ? T_SIDEWALK : T_GRASS; }
+static int g_yard(float u, float v, int li, int lj) { (void)u; (void)v; (void)li; (void)lj; return T_YARD; }
+static int g_houses(float u, float v, int li, int lj)
+{
+    int q = (u >= 41.0f ? 1 : 0) + (v >= 41.0f ? 2 : 0);
+    float pu = u - (17.0f + (q % 2) * 24.0f), pv = v - (17.0f + (q / 2) * 24.0f);
+    if ((hash3(li * 4 + q, lj, 21) & 7u) == 0) return T_GRASS;
+    return in(pu, 2, 20) && in(pv, 13, 21) ? T_DIRT : T_GRASS;
+}
+
 /* ---------------------------------------------------------------- lots */
 
 static void lot_panel5(float ox, float oz, unsigned int s)
 {
     static const float DOORS[3] = { 6.0f, 20.0f, 34.0f };
-    ground_tiled(ox + 16, oz + 16, ox + 64, oz + 64, WALK_H, 8.0f, T_YARD, 0);
+    lot_ground(ox, oz, g_panel5, 0, 0);
     block_of_flats(ox + 20, oz + 28, ox + 60, oz + 40, 5, pick_panel, s, DOORS, 3, 1);
-    ground(ox + 24.5f, oz + 40, ox + 27.5f, oz + 64, WALK_H + 0.01f, T_SIDEWALK, 1, WHITE);
     billboard(ox + 18, WALK_H, oz + 54, 6, 8, T_BIRCH, 1);
     billboard(ox + 38, WALK_H, oz + 56, 6, 9, T_BIRCH, 1);
     billboard(ox + 58, WALK_H, oz + 50, 5, 14, T_POPLAR, 1);
@@ -514,9 +543,8 @@ static void lot_panel5(float ox, float oz, unsigned int s)
 static void lot_panel9(float ox, float oz, unsigned int s)
 {
     static const float DOORS[2] = { 7.0f, 21.0f };
-    ground_tiled(ox + 16, oz + 16, ox + 64, oz + 64, WALK_H, 8.0f, T_YARD, 0);
+    lot_ground(ox, oz, g_panel9, 0, 0);
     block_of_flats(ox + 24, oz + 22, ox + 52, oz + 36, 9, pick_panel, s, DOORS, 2, 1);
-    ground_tiled(ox + 32, oz + 44, ox + 44, oz + 56, WALK_H + 0.01f, 4.0f, T_DIRT, 0);
     billboard(ox + 20, WALK_H, oz + 46, 6, 9, T_BIRCH, 1);
     billboard(ox + 58, WALK_H, oz + 56, 5, 15, T_POPLAR, 1);
     billboard(ox + 56, WALK_H, oz + 20, 6, 8, T_BIRCH, 1);
@@ -526,9 +554,8 @@ static void lot_panel9(float ox, float oz, unsigned int s)
 static void lot_school(float ox, float oz, unsigned int s)
 {
     static const float DOORS[1] = { 17.0f };
-    ground_tiled(ox + 16, oz + 16, ox + 64, oz + 64, WALK_H, 8.0f, T_GRASS, 0);
+    lot_ground(ox, oz, g_school, 0, 0);
     block_of_flats(ox + 20, oz + 20, ox + 56, oz + 36, 3, pick_brick, s, DOORS, 1, 0);
-    ground_tiled(ox + 22, oz + 42, ox + 58, oz + 60, WALK_H + 0.01f, 6.0f, T_DIRT, 0);
     billboard(ox + 18, WALK_H, oz + 40, 5, 14, T_POPLAR, 1);
     billboard(ox + 60, WALK_H, oz + 40, 5, 15, T_POPLAR, 1);
 }
@@ -536,7 +563,7 @@ static void lot_school(float ox, float oz, unsigned int s)
 static void lot_houses(float ox, float oz, int li, int lj)
 {
     int q;
-    ground_tiled(ox + 16, oz + 16, ox + 64, oz + 64, WALK_H, 8.0f, T_GRASS, 0);
+    lot_ground(ox, oz, g_houses, li, lj);
     for (q = 0; q < 4; q++) {
         float px0 = ox + 17 + (q % 2) * 24, pz0 = oz + 17 + (q / 2) * 24;
         unsigned int h = hash3(li * 4 + q, lj, 21);
@@ -552,7 +579,6 @@ static void lot_houses(float ox, float oz, int li, int lj)
         fence(px0, pz0, px0, pz0 + 22);
         fence(px0 + 22, pz0, px0 + 22, pz0 + 22);
         gable_house(px0 + 6, pz0 + 4, px0 + 14, pz0 + 10, (h >> 4) & 1 ? T_SLATE : T_ROOF_RED, h);
-        ground_tiled(px0 + 2, pz0 + 13, px0 + 20, pz0 + 21, WALK_H + 0.01f, 6.0f, T_DIRT, 0);
         for (k = 0; k < 4; k++) billboard(px0 + 4 + k * 4.5f, WALK_H, pz0 + 17, 3.6f, 2.4f, T_SUNFLOWERS, 0);
         billboard(px0 + 18, WALK_H, pz0 + 6, 5, 7, (h >> 6) & 1 ? T_BIRCH : T_BUSH, 1);
     }
@@ -562,7 +588,7 @@ static void lot_garages(float ox, float oz)
 {
     float x;
     int k = 0;
-    ground_tiled(ox + 16, oz + 16, ox + 64, oz + 64, WALK_H, 8.0f, T_CONCRETE, 0);
+    lot_ground(ox, oz, g_concrete, 0, 0);
     for (x = ox + 20; x < ox + 60 - 0.1f; x += 4.0f, k++) {
         int r;
         for (r = 0; r < 2; r++) {
@@ -582,7 +608,7 @@ static void lot_market(float ox, float oz)
 {
     static const int SIGNS[4] = { T_SIGN_PIVO, T_SIGN_KAVA, T_SIGN_TSYHARKY, T_SIGN_HAZETY };
     int k;
-    ground_tiled(ox + 16, oz + 16, ox + 64, oz + 64, WALK_H, 4.0f, T_SIDEWALK, 0);
+    lot_ground(ox, oz, g_market, 0, 0);
     for (k = 0; k < 7; k++) kiosk(ox + 18 + k * 6.0f, oz + 20, SIGNS[k % 4], 1);
     for (k = 0; k < 6; k++) {
         stall(ox + 20 + k * 6.5f, oz + 33);
@@ -593,8 +619,7 @@ static void lot_market(float ox, float oz)
 
 static void lot_kiosk(float ox, float oz)
 {
-    ground_tiled(ox + 16, oz + 16, ox + 64, oz + 64, WALK_H, 8.0f, T_GRASS, 0);
-    ground_tiled(ox + 28, oz + 24, ox + 52, oz + 48, WALK_H + 0.01f, 4.0f, T_SIDEWALK, 0);
+    lot_ground(ox, oz, g_kiosk, 0, 0);
     kiosk(ox + 36, oz + 36, T_SIGN_PIVO, 1);
     bench(ox + 31, oz + 30, 1);
     bench(ox + 46, oz + 30, 1);
@@ -607,9 +632,7 @@ static void lot_kiosk(float ox, float oz)
 static void lot_park(float ox, float oz, int li, int lj)
 {
     int a, b;
-    ground_tiled(ox + 16, oz + 16, ox + 64, oz + 64, WALK_H, 8.0f, T_GRASS, 0);
-    ground(ox + 38, oz + 16, ox + 42, oz + 64, WALK_H + 0.01f, T_SIDEWALK, 1, WHITE);
-    ground(ox + 16, oz + 38, ox + 64, oz + 42, WALK_H + 0.01f, T_SIDEWALK, 0, WHITE);
+    lot_ground(ox, oz, g_park, li, lj);
     for (a = 0; a < 4; a++)
         for (b = 0; b < 4; b++) {
             float tx = ox + 22 + a * 12 + hf(li * 8 + a, lj * 8 + b, 33) * 4 - 2;
@@ -625,7 +648,7 @@ static void lot_park(float ox, float oz, int li, int lj)
 static void lot_empty(float ox, float oz, int li, int lj)
 {
     int k;
-    ground_tiled(ox + 16, oz + 16, ox + 64, oz + 64, WALK_H, 8.0f, T_YARD, 0);
+    lot_ground(ox, oz, g_yard, li, lj);
     for (k = 0; k < 6; k++)
         billboard(ox + 20 + hf(li, lj, 40 + k) * 40, WALK_H, oz + 20 + hf(li, lj, 50 + k) * 40, 4, 3, T_BUSH, 0);
 }

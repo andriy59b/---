@@ -146,7 +146,6 @@ void hud_settings(int sel, const Level *L)
         case SET_LOOK:   snprintf(buf, sizeof(buf), "Чутливість камери: < %d >", L->look_speed); break;
         case SET_MUSIC:  snprintf(buf, sizeof(buf), "Музика і радіо: < %d >", L->music_vol); break;
         case SET_SFX:    snprintf(buf, sizeof(buf), "Звуки: < %d >", L->sfx_vol); break;
-        case SET_VOICE:  snprintf(buf, sizeof(buf), "Голоси: < %d >", L->voice_vol); break;
         case SET_CYCLE:  snprintf(buf, sizeof(buf), "Зміна дня і ночі: %s", L->day_cycle ? "увімк" : "вимк"); break;
         case SET_TIME:   snprintf(buf, sizeof(buf), "Час доби: %s", (L->time > 0.02f && L->time < 0.48f) ? "день" : "ніч"); break;
         case SET_INFO:   snprintf(buf, sizeof(buf), "Інформація на екрані: %s", L->show_info ? "увімк" : "вимк"); break;

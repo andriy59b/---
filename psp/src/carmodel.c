@@ -211,13 +211,18 @@ static void build_model(int t)
 
     /* driver door, built around its hinge (front edge) */
     {
-        float len = s->length * 0.26f, y0 = s->clearance + 0.08f, y1 = s->hood_h - 0.02f;
+        float len = s->length * 0.26f, y0 = s->clearance + 0.08f, y1 = s->hood_h - 0.02f, yw = s->height - 0.08f;
         UVRect side = uv_tile(T_CAR_SIDE);
         UVRect sub = { side.u0 + (side.u1 - side.u0) * 0.36f, side.v0 + (side.v1 - side.v0) * 0.2f,
                        side.u0 + (side.u1 - side.u0) * 0.66f, side.v1 };
         gm_quad(&cm->door, v3(-0.01f, y0, 0), v3(-0.01f, y1, 0), v3(-0.01f, y1, len), v3(-0.01f, y0, len), sub, WHITE);
         gm_quad(&cm->door, v3(0.0f, y0, len), v3(0.0f, y1, len), v3(0.0f, y1, 0), v3(0.0f, y0, 0),
                 uv_sub(T_CAR_PARTS, CP_DARK), gfx_rgba(90, 90, 90, 255));
+        /* door window with its frame */
+        gm_quad(&cm->door, v3(-0.01f, y1, 0.05f), v3(-0.01f, yw, 0.18f), v3(-0.01f, yw, len - 0.05f), v3(-0.01f, y1, len - 0.05f),
+                uv_tile(T_CAR_GLASS), 0xFFFFFFFFu);
+        gm_quad(&cm->door, v3(0.0f, y1, len - 0.05f), v3(0.0f, yw, len - 0.05f), v3(0.0f, yw, 0.18f), v3(0.0f, y1, 0.05f),
+                uv_tile(T_CAR_GLASS), 0xFFFFFFFFu);
     }
 
     build_wheel(&cm->wheel, s->wheel_r, 0.22f);
@@ -272,8 +277,21 @@ void car_append_mesh(GMesh *out, const Car *c)
     append_painted(out, &cm->paint, &body, c->paint);
     gm_append_xf(out, &cm->detail, &body);
     {
-        Xf hinge = xf_translate(v3(-s->width * 0.5f - 0.005f, 0, zof(s, s->ws_base - 0.05f)));
-        Xf rot = xf_rot_y(-c->door * 1.1f), a = xf_mul(&body, &hinge), m = xf_mul(&a, &rot);
+        Xf hinge = xf_translate(v3(-s->width * 0.5f - 0.03f, 0, zof(s, s->ws_base - 0.05f)));
+        Xf rot = xf_rot_y(-c->door * 1.15f), a = xf_mul(&body, &hinge), m = xf_mul(&a, &rot);
+        if (c->door > 0.02f) {
+            /* dark cabin opening behind the swung-out door, with a seat */
+            float z0 = zof(s, s->ws_base - 0.05f), z1 = z0 + s->length * 0.26f;
+            float y0 = s->clearance + 0.08f, y1 = s->height - 0.06f, x = -s->width * 0.5f - 0.012f;
+            GMesh hole;
+            gm_init(&hole);
+            gm_quad_flat(&hole, v3(x, y0, z1), v3(x, y1, z1), v3(x, y1, z0), v3(x, y0, z0),
+                         uv_sub(T_CAR_PARTS, CP_DARK), gfx_rgba(26, 24, 24, 255));
+            gm_box(&hole, v3(-s->width * 0.45f, y0 + 0.2f, z0 + 0.25f), v3(-s->width * 0.1f, y0 + 0.45f, z1 - 0.1f),
+                   uv_tile(T_WHITE), uv_tile(T_WHITE), gfx_rgba(90, 60, 50, 255), BOX_ALL);
+            gm_append_xf(out, &hole, &body);
+            gm_free(&hole);
+        }
         append_painted(out, &cm->door, &m, c->paint);
     }
     /* wheels follow the ground, not the body roll */

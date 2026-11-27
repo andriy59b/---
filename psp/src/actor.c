@@ -123,8 +123,8 @@ static void walk_pose(const AnimState *a, Pose *o)
     leg_cycle(o, B_THIGH_L, ph, run);
     leg_cycle(o, B_THIGH_R, ph + PI_F, run);
     o->pelvis_y = -B * cosf(2.0f * ph) - 0.055f * run;
-    set(o, B_PELVIS, 0.0f, -0.13f * sp * (1.0f - 0.3f * run), 0.045f * cosf(ph));
-    set(o, B_SPINE, -lerpf(0.05f, 0.26f, run) + a->accel_lean, 0.17f * sp, -0.5f * 0.045f * cosf(ph));
+    set(o, B_PELVIS, 0.0f, -0.10f * sp * (1.0f - 0.3f * run), 0.02f * cosf(ph));
+    set(o, B_SPINE, -lerpf(0.03f, 0.16f, run) + a->accel_lean, 0.12f * sp, -0.5f * 0.02f * cosf(ph));
     set(o, B_HEAD, lerpf(0.05f, 0.22f, run) * 0.8f + 0.02f * cosf(2.0f * ph), -0.15f * sp, 0.0f);
     set(o, B_UARM_L, -Aa * sp, 0.0f, -0.08f - 0.1f * run);
     set(o, B_UARM_R, Aa * sp, 0.0f, 0.08f + 0.1f * run);
@@ -512,7 +512,7 @@ int ped_update(Ped *p, V3 move, int sprint, int jump, float dt)
         if (dl > acc * dt) dv = v3_scale(dv, acc * dt / dl);
         hv = v3_add(hv, dv);
         fwd_acc = v3_dot(v3_scale(dv, 1.0f / dt), yaw_fwd(p->yaw));
-        a->accel_lean = approach(a->accel_lean, clampf(-fwd_acc * 0.02f, -0.18f, 0.12f), dt * 1.5f);
+        a->accel_lean = approach(a->accel_lean, clampf(-fwd_acc * 0.006f, -0.06f, 0.04f), dt * 1.0f);
     }
 
     /* facing follows the movement; lean into turns */
@@ -529,7 +529,8 @@ int ped_update(Ped *p, V3 move, int sprint, int jump, float dt)
         p->yaw_vel = approach(p->yaw_vel, 0.0f, dt * 40.0f);
     }
     p->yaw = wrap_pi(p->yaw + p->yaw_vel * dt);
-    a->lean = approach(a->lean, clampf(p->yaw_vel * spd * 0.028f, -0.28f, 0.28f), dt * 2.5f);
+    /* lean into turns only when running fast, and only a little */
+    a->lean = approach(a->lean, clampf(p->yaw_vel * (spd > 3.0f ? spd - 3.0f : 0.0f) * 0.012f, -0.07f, 0.07f), dt * 1.5f);
 
     /* jumping: a short crouch before take-off */
     if (jump && p->on_ground && p->jump_t <= 0.0f && a->knock < 0.1f) p->jump_t = 0.1f;

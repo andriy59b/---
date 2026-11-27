@@ -1,5 +1,6 @@
 #include "cutscene.h"
 #include "city.h"
+#include "texgen.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -8,7 +9,6 @@ enum {
     C_CAM = 1, C_AUTOCAM, C_PLACE, C_WALK, C_FACE, C_SAY, C_GEST, C_WAIT, C_FADE, C_TITLE, C_REQ, C_END
 };
 
-static const char *SCENE_NAMES[CS_COUNT] = { "", "intro", "garage", "market", "kiosk", "fail", "kaban" };
 
 /* who each actor looks at (-1: nobody) */
 static int look_target[N_ACTORS];
@@ -97,6 +97,20 @@ static void title(Cutscene *c, const char *a, const char *b, float t)
 static void request(Cutscene *c, int what) { push(c, C_REQ)->gest = what; }
 
 static float yaw_to(V3 from, V3 to) { return yaw_of(to.x - from.x, to.z - from.z); }
+
+/* Reading time for a subtitle line (seconds) */
+float cs_line_time(const char *text)
+{
+    float t = 0.9f;
+    const char *p = text;
+    while (*p) {
+        unsigned int c = utf8_next(&p);
+        if (c == ',' || c == 0x2014) t += 0.15f;
+        else if (c == '.' || c == '!' || c == '?') t += 0.25f;
+        else t += 0.055f;
+    }
+    return t;
+}
 
 /* --------------------------------------------------------------- scenes */
 
@@ -299,19 +313,18 @@ static int step_cmd(Cutscene *c, const CsIO *io)
         if (a) a->anim.gesture = k->gest;
         return 0;
     case C_SAY:
-        snprintf(c->voice_id, sizeof(c->voice_id), "%s_%02d", SCENE_NAMES[c->id], ++c->line);
+        ++c->line;
         c->sub_who = cs_speaker_name(k->actor);
         c->sub_text = k->text;
         c->sub_t = 0.0f;
         c->speaker = k->actor;
-        c->min_say = 0.6f;
+        c->min_say = cs_line_time(k->text);
         if (a) a->anim.gesture = k->gest;
         if (k->other >= 0 && io->actors[k->other]) {
             int g = io->actors[k->other]->anim.gesture;
             if (g == GEST_WAVE || g == GEST_POINT || g == GEST_EXPLAIN || g == GEST_SHRUG)
                 io->actors[k->other]->anim.gesture = GEST_NONE;
         }
-        if (io->say) io->say(k->actor, k->text, c->voice_id);
         for (i = 0; i < N_ACTORS; i++) look_target[i] = k->actor;
         look_target[k->actor] = k->other;
         if (a && k->other >= 0 && io->actors[k->other] && !a->has_goal) {
@@ -351,12 +364,8 @@ static int blocked(Cutscene *c, const CsIO *io, int advance)
     if (!c->running) return 0;
     switch (k->type) {
     case C_SAY: {
-        int talking = io->speaking ? io->speaking() : 0;
-        if (advance && c->sub_t > 0.25f) {
-            if (io->say) io->say(-1, NULL, NULL);
-            return 0;
-        }
-        return talking || c->sub_t < c->min_say;
+        if (advance && c->sub_t > 0.25f) return 0;
+        return c->sub_t < c->min_say;
     }
     case C_WALK: {
         Ped *a = io->actors[k->actor];
@@ -397,7 +406,6 @@ void cs_update(Cutscene *c, const CsIO *io, float dt, int advance, int skip)
             if (k->type == C_WALK && a) { a->pos = k->p; a->has_goal = 0; }
             if (k->type == C_REQ) c->requests |= k->gest;
         }
-        if (io->say) io->say(-1, NULL, NULL);
         c->running = 0;
         c->fade = 0.0f;
     }
@@ -427,7 +435,13 @@ void cs_update(Cutscene *c, const CsIO *io, float dt, int advance, int skip)
         } else {
             a->has_look_at = 0;
         }
-        if (i == c->speaker) a->anim.talk = 1.0f;
+        if (i == c->speaker) {
+            /* mouth moves while the line is being "said" */
+            a->anim.talk = 1.0f;
+            a->anim.mouth = c->sub_t < c->min_say - 0.3f ? (sinf(c->t * 17.0f) * sinf(c->t * 5.3f) > 0.0f ? 1.0f : 0.0f) : 0.0f;
+        } else {
+            a->anim.mouth = 0.0f;
+        }
     }
     if (!c->running)
         for (i = 0; i < N_ACTORS; i++)

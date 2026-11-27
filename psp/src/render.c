@@ -17,7 +17,7 @@
 #define FB0_OFF 0x000000
 #define FB1_OFF 0x088000
 #define ZB_OFF 0x110000
-#define FAR_PLANE 420.0f
+#define FAR_PLANE 360.0f
 #define MAX_BATCH 65520 /* vertices per draw call, multiple of 3 */
 
 typedef struct { unsigned int color; float x, y, z; } CVertex;
@@ -123,7 +123,8 @@ void r_init(void)
     sceGuEnable(GU_CLIP_PLANES);
     sceGuEnable(GU_TEXTURE_2D);
     sceGuTexFunc(GU_TFX_MODULATE, GU_TCC_RGBA);
-    sceGuTexFilter(GU_NEAREST, GU_NEAREST);
+    /* sharp pixels up close, smoothed when minified so distant ground does not shimmer */
+    sceGuTexFilter(GU_LINEAR, GU_NEAREST);
     sceGuTexWrap(GU_CLAMP, GU_CLAMP);
     sceGuAlphaFunc(GU_GREATER, 0x80, 0xFF);
     sceGuEnable(GU_ALPHA_TEST);
@@ -159,7 +160,7 @@ void r_camera(V3 eye, float yaw, float pitch, float fov)
     ScePspFVector3 t;
     sceGumMatrixMode(GU_PROJECTION);
     sceGumLoadIdentity();
-    sceGumPerspective(fov, (float)SCR_W / SCR_H, 0.12f, FAR_PLANE);
+    sceGumPerspective(fov, (float)SCR_W / SCR_H, 0.3f, FAR_PLANE);
     sceGumMatrixMode(GU_VIEW);
     sceGumLoadIdentity();
     sceGumRotateX(-pitch);

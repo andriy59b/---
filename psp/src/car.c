@@ -300,9 +300,15 @@ static void physics_substep(Car *c, float dt)
     steer_target = c->in_steer * s->max_steer / (1.0f + fabsf(u) / 18.0f);
     c->steer = approach(c->steer, steer_target, 2.6f * dt);
 
-    /* gearbox */
-    if (throttle < -0.05f && u < 0.8f) c->gear = -1;
-    else if (throttle > 0.05f && c->gear < 0 && u > -0.8f) c->gear = 1;
+    /* gearbox: pressing against the direction of travel brakes first,
+     * then selects first gear / reverse once the car has (almost) stopped */
+    if (throttle > 0.05f) {
+        if (u < -0.6f) brk = throttle * m * 9.0f;
+        else if (c->gear < 1) c->gear = 1;
+    } else if (throttle < -0.05f) {
+        if (u > 0.6f) brk = -throttle * m * 9.0f;
+        else c->gear = -1;
+    }
     {
         float ratio = c->gear < 0 ? REV_GEAR : GEARS[c->gear - 1];
         c->rpm = fabsf(u) / s->wheel_r * ratio * FINAL_DRIVE * 60.0f / 6.2831853f;
@@ -312,11 +318,12 @@ static void physics_substep(Car *c, float dt)
         if (c->gear > 0 && c->rpm > RED_RPM * 0.88f && c->gear < 5) c->gear++;
         if (c->gear > 1 && c->rpm < RED_RPM * 0.42f) c->gear--;
         if (c->rpm > RED_RPM) c->rpm = RED_RPM;
-        if (c->gear > 0 && throttle > 0.0f)
-            drive = throttle * engine_torque(s, c->rpm) * GEARS[c->gear - 1] * FINAL_DRIVE / s->wheel_r * 0.85f;
-        else if (c->gear < 0 && throttle < 0.0f)
-            drive = throttle * engine_torque(s, c->rpm) * REV_GEAR * FINAL_DRIVE / s->wheel_r * 0.6f;
-        if (c->gear > 0 && throttle < 0.0f) brk = -throttle * m * 9.0f;
+        if (brk == 0.0f) {
+            if (c->gear > 0 && throttle > 0.0f)
+                drive = throttle * engine_torque(s, c->rpm) * GEARS[c->gear - 1] * FINAL_DRIVE / s->wheel_r * 0.85f;
+            else if (c->gear < 0 && throttle < 0.0f)
+                drive = throttle * engine_torque(s, c->rpm) * REV_GEAR * FINAL_DRIVE / s->wheel_r * 0.6f;
+        }
     }
     if (c->rpm >= RED_RPM - 1.0f) drive *= 0.2f;
 

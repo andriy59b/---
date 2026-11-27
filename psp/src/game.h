@@ -8,7 +8,6 @@
 #define GAME_TITLE "UkraineCraft"
 #define SAVE_DIR "ukrainecraft_save"
 #define LEVEL_FILE SAVE_DIR "/level.dat"
-#define VOICE_DIR "voice"
 #define RADIO_STATIONS 3
 
 typedef struct {
@@ -20,7 +19,7 @@ typedef struct {
     int look_speed;       /* 1..5 */
     int day_cycle;
     int show_info;
-    int music_vol, sfx_vol, voice_vol; /* 0..10 */
+    int music_vol, sfx_vol, unused_vol; /* 0..10 */
     int first_person;
     int radio;
     Story story;
@@ -47,7 +46,7 @@ typedef struct {
     const char *area;
 } HudInfo;
 
-enum { SET_RADIUS, SET_LOOK, SET_MUSIC, SET_SFX, SET_VOICE, SET_CYCLE, SET_TIME, SET_INFO, SET_BACK, SET_COUNT };
+enum { SET_RADIUS, SET_LOOK, SET_MUSIC, SET_SFX, SET_CYCLE, SET_TIME, SET_INFO, SET_BACK, SET_COUNT };
 enum { PAUSE_RESUME, PAUSE_SETTINGS, PAUSE_QUIT, PAUSE_COUNT };
 enum { MENU_CONTINUE, MENU_NEW, MENU_SETTINGS, MENU_EXIT, MENU_COUNT };
 

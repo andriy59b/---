@@ -12,7 +12,6 @@
 #include "../src/story.h"
 #include "../src/synth.h"
 #include "../src/texgen.h"
-#include "../src/voice.h"
 
 static int failures;
 #define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); failures++; } } while (0)
@@ -113,6 +112,25 @@ static void test_car_physics(void)
         CHECK(c->pos.z + CAR_SPECS[CAR_LASTIVKA].length * 0.5f < 28.3f);
         CHECK(impact > 4.0f);
     }
+    /* rolling backwards: the gas pedal brakes first, then drives forward */
+    {
+        Car *c;
+        cars_clear();
+        c = &cars[car_spawn(CK_PLAYER, CAR_LASTIVKA, v3(400, 0, -300), 0, 0xFFFFFFFFu)];
+        c->vel = v3(0, 0, 6.0f); /* moving backwards (forward is -z) */
+        c->gear = -1;
+        for (i = 0; i < 180; i++) {
+            c->in_throttle = 1.0f;
+            car_step(c, 1.0f / 60);
+        }
+        CHECK(car_speed(c) > 3.0f && c->gear >= 1);
+        /* and the brake pedal while rolling forward brakes, then reverses */
+        for (i = 0; i < 240; i++) {
+            c->in_throttle = -1.0f;
+            car_step(c, 1.0f / 60);
+        }
+        CHECK(car_speed(c) < -1.0f && c->gear == -1);
+    }
     /* the kerb lifts the car */
     {
         Car *c;
@@ -151,14 +169,14 @@ static void test_traffic(void)
     /* traffic stops for a pedestrian in its lane */
     {
         Car *c;
-        V3 ped = v3(90.0f, 0.0f, 10.5f);
+        V3 ped = v3(44.0f, 0.0f, 10.5f); /* before the next crossing, so the car cannot turn away */
         cars_clear();
-        c = &cars[car_spawn(CK_TRAFFIC, CAR_KLASYKA, v3(55.0f, 0, 10.5f), -PI_F / 2, 0xFFFFFFFFu)];
+        c = &cars[car_spawn(CK_TRAFFIC, CAR_KLASYKA, v3(18.0f, 0, 10.5f), -PI_F / 2, 0xFFFFFFFFu)];
         c->dir = 0;
         c->next_dir = 0;
         c->vel = v3(10.0f, 0, 0);
         for (t = 0; t < 60 * 6; t++) cars_update(1.0f / 60, focus, &ped, 0);
-        CHECK(c->pos.x < 90.0f - 3.0f);
+        CHECK(c->pos.x < 44.0f - 3.0f);
         CHECK(car_speed(c) < 0.5f);
     }
 }
@@ -233,8 +251,6 @@ static void test_actor(void)
     }
 }
 
-static Cutscene *cur;
-static int fake_speaking(void) { return cur && cur->sub_text && cur->sub_t < voice_duration(cur->sub_text); }
 
 static void test_cutscenes_and_story(void)
 {
@@ -247,8 +263,6 @@ static void test_cutscenes_and_story(void)
     StoryOut o;
     int id, i, f;
     memset(&io, 0, sizeof(io));
-    io.speaking = fake_speaking;
-    cur = &cs;
     for (i = 0; i < N_ACTORS; i++) {
         ped_init(&actors[i], WHO[i], v3(0, 0, 0), 0);
         io.actors[i] = &actors[i];
@@ -263,6 +277,7 @@ static void test_cutscenes_and_story(void)
             for (i = 0; i < N_ACTORS; i++) ped_update(&actors[i], v3(0, 0, 0), 0, 0, 1.0f / 60);
         }
         printf("cutscene %d: %.1f s, %d lines\n", id, f / 60.0f, lines);
+        CHECK(f / 60.0f > lines * 1.2f);   /* every subtitle stays long enough to read */
         CHECK(!cs.running);
         CHECK(lines >= 1);
         if (id == CS_KIOSK) CHECK(reqs & CS_REQ_CHASER);
@@ -329,39 +344,13 @@ static void test_audio(void)
         int lead = synth_track_steps(t, 0);
         for (c = 1; c < 4; c++) CHECK(synth_track_steps(t, c) > 0 && lead % synth_track_steps(t, c) == 0);
     }
-    synth_music(-1);
-    voice_say("Андрюха! Живий! Ну ти й вимахав у тій армії.", 102.0f, 0.95f);
-    CHECK(voice_busy());
+    synth_music(MUS_DISCO);
+    synth_sfx(SFX_STEP);
+    synth_render(buf, 4096);
     sum = 0.0;
-    n = 0;
-    while (voice_busy() && n < SYNTH_RATE * 4) {
-        synth_render(buf + n * 2, 1024);
-        for (i = 0; i < 1024; i++) sum += (double)buf[(n + i) * 2] * buf[(n + i) * 2];
-        n += 1024;
-    }
-    printf("voice: %.2f s (estimate %.2f s), rms %.0f\n", n / (float)SYNTH_RATE,
-           voice_duration("Андрюха! Живий! Ну ти й вимахав у тій армії."), sqrt(sum / n));
-    CHECK(!voice_busy());
-    CHECK(sqrt(sum / n) > 800.0 && sqrt(sum / n) < 12000.0);
-    /* WAV round trip */
-    {
-        FILE *f = fopen("test_voice.wav", "wb");
-        unsigned char h[44] = { 'R', 'I', 'F', 'F', 0, 0, 0, 0, 'W', 'A', 'V', 'E', 'f', 'm', 't', ' ',
-                                16, 0, 0, 0, 1, 0, 1, 0, 0x22, 0x56, 0, 0, 0x44, 0xAC, 0, 0, 2, 0, 16, 0,
-                                'd', 'a', 't', 'a', 0, 0, 0, 0 };
-        short pcm[100], *loaded;
-        int ns, rate;
-        for (i = 0; i < 100; i++) pcm[i] = (short)(i * 100);
-        h[40] = 200;
-        fwrite(h, 1, 44, f);
-        fwrite(pcm, 2, 100, f);
-        fclose(f);
-        CHECK(wav_load("test_voice.wav", &loaded, &ns, &rate));
-        CHECK(ns == 100 && rate == 22050 && loaded[50] == 5000);
-        free(loaded);
-        remove("test_voice.wav");
-        CHECK(!wav_load("missing.wav", &loaded, &ns, &rate));
-    }
+    for (i = 0; i < 8192; i++) sum += (double)buf[i] * buf[i];
+    CHECK(sum > 0.0);
+    (void)n;
 }
 
 static void test_text_and_textures(void)
@@ -391,6 +380,7 @@ int main(void)
     test_actor();
     test_cutscenes_and_story();
     test_audio();
+    CHECK(cs_line_time("Тихо.") > 1.0f && cs_line_time("Мені такі люди потрібні. Робота чиста, гроші — в доларах.") > 3.5f);
     test_text_and_textures();
     city_free();
     if (failures) {
