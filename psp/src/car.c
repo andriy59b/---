@@ -72,10 +72,11 @@ int car_find_kind(int kind)
 
 float car_speed(const Car *c) { return v3_dot(c->vel, yaw_fwd(c->yaw)); }
 
-V3 car_door_point(const Car *c)
+V3 car_door_point(const Car *c, int side)
 {
     const CarSpec *s = &CAR_SPECS[c->type];
-    return car_local(c, v3(-s->width * 0.5f - 0.55f, 0, -s->length * 0.5f + s->ws_base + s->length * 0.13f));
+    float x = (s->width * 0.5f + 0.55f) * (side ? 1.0f : -1.0f);
+    return car_local(c, v3(x, 0, -s->length * 0.5f + s->ws_base + s->length * 0.13f));
 }
 
 V3 car_seat_point(const Car *c)
@@ -84,19 +85,22 @@ V3 car_seat_point(const Car *c)
     return car_local(c, v3(-s->width * 0.22f, 0, -s->length * 0.5f + s->ws_base + s->length * 0.15f));
 }
 
-int car_nearest(V3 pos, float maxd)
+int car_nearest(V3 pos, float maxd, int *side)
 {
-    int i, best = -1;
+    int i, best = -1, sd;
     float bd = maxd * maxd;
     for (i = 0; i < MAX_CARS; i++) {
         V3 d;
         float dd;
         if (cars[i].kind == CK_FREE || cars[i].kind == CK_CHASER || cars[i].kind == CK_SCRIPT) continue;
-        d = v3_sub(car_door_point(&cars[i]), pos);
-        dd = d.x * d.x + d.z * d.z;
-        if (dd < bd) {
-            bd = dd;
-            best = i;
+        for (sd = 0; sd < 2; sd++) {
+            d = v3_sub(car_door_point(&cars[i], sd), pos);
+            dd = d.x * d.x + d.z * d.z;
+            if (dd < bd) {
+                bd = dd;
+                best = i;
+                if (side) *side = sd;
+            }
         }
     }
     return best;

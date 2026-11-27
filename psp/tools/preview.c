@@ -118,15 +118,17 @@ int main(int argc, char **argv)
         for (d = 0; d < 2; d++) {
             char name[32];
             cars_clear();
-            k = car_spawn(CK_PARKED, CAR_KLASYKA, v3(410.0f, 0, 8.0f), -PI_F / 2, 0xFF3A2A9Au);
+            k = car_spawn(CK_PARKED, CAR_LASTIVKA, v3(410.0f, 0, 8.0f), -PI_F / 2, 0xFF3A2A9Au);
             cars[k].door = d ? 1.0f : 0.5f;
             npeds = 1;
-            ped_init(&peds[0], CH_ANDRIY, car_door_point(&cars[k]), yaw_of(yaw_right(cars[k].yaw).x, yaw_right(cars[k].yaw).z));
-            if (d) { peds[0].anim.crouch = 0.6f; peds[0].anim.sit = 0.3f; peds[0].pos = v3_lerp(car_door_point(&cars[k]), car_seat_point(&cars[k]), 0.4f); }
+            ped_init(&peds[0], CH_ANDRIY, car_door_point(&cars[k], 0), yaw_of(yaw_right(cars[k].yaw).x, yaw_right(cars[k].yaw).z));
+            if (d) { peds[0].anim.crouch = 0.6f; peds[0].anim.sit = 0.3f; peds[0].pos = v3_lerp(car_door_point(&cars[k], 0), car_seat_point(&cars[k]), 0.4f); }
             else { peds[0].anim.gesture = GEST_POINT; peds[0].anim.gesture_w = 1.0f; }
             snprintf(name, sizeof(name), "door%d", d);
             res_scale = 2;
             shot(dir, name, v3(407.0f, 1.8f, 3.2f), v3(410.0f, 0.9f, 7.0f));
+            snprintf(name, sizeof(name), "doorB%d", d);
+            shot(dir, name, v3(406.0f, 1.9f, 6.5f), v3(410.5f, 0.9f, 8.0f));
             res_scale = 1;
         }
         npeds = 0;

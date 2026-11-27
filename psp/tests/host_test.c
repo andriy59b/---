@@ -9,6 +9,7 @@
 #include "../src/car.h"
 #include "../src/city.h"
 #include "../src/cutscene.h"
+#include "../src/ride.h"
 #include "../src/story.h"
 #include "../src/synth.h"
 #include "../src/texgen.h"
@@ -252,6 +253,59 @@ static void test_actor(void)
 }
 
 
+static int inside_car(const Car *c, V3 p)
+{
+    V3 d = v3_sub(p, c->pos), f = yaw_fwd(c->yaw), r = yaw_right(c->yaw);
+    return fabsf(v3_dot(d, f)) < CAR_SPECS[c->type].length * 0.5f && fabsf(v3_dot(d, r)) < CAR_SPECS[c->type].width * 0.5f;
+}
+
+static void test_ride(void)
+{
+    int side, k, i, ev, all = 0, state_seen[RIDE_EXIT_CLOSE + 1] = { 0 }, inside_walk = 0;
+    float max_door = 0.0f;
+    Ride r;
+    Ped p;
+    Car *c;
+    /* standing on the car's right (passenger) side, behind its middle */
+    cars_clear();
+    k = car_spawn(CK_PARKED, CAR_LASTIVKA, v3(400, 0, -300), 0.0f, 0xFFFFFFFFu);
+    c = &cars[k];
+    ped_init(&p, CH_ANDRIY, car_local(c, v3(2.2f, 0, 1.5f)), 0.0f);
+    CHECK(car_nearest(p.pos, 4.5f, &side) == k && side == 1);
+    ride_reset(&r);
+    ride_enter(&r, &p, k, side);
+    for (i = 0; i < 600 && r.state != RIDE_DRIVE; i++) {
+        ev = ride_update(&r, &p, 1.0f / 60);
+        all |= ev;
+        state_seen[r.state] = 1;
+        if (c->door > max_door) max_door = c->door;
+        if (r.state == RIDE_WALK && inside_car(c, p.pos)) inside_walk++;
+        CHECK(c->door_side == 1 || c->door < 0.01f);
+    }
+    CHECK(r.state == RIDE_DRIVE && c->kind == CK_PLAYER);
+    CHECK(state_seen[RIDE_OPEN] && state_seen[RIDE_IN] && state_seen[RIDE_CLOSE]);
+    CHECK(inside_walk == 0);            /* never walks through the car */
+    CHECK(max_door > 0.95f && c->door == 0.0f);
+    CHECK(!p.active && (all & RIDE_EV_ENTERED) && (all & RIDE_EV_DOOR));
+    CHECK(i > 100);                     /* the whole thing takes a moment, not one frame */
+    /* getting out: left door, standing next to the car, able to walk */
+    CHECK(ride_exit(&r, &p));
+    for (i = 0; i < 300 && r.state != RIDE_FOOT; i++) all |= ride_update(&r, &p, 1.0f / 60);
+    CHECK(r.state == RIDE_FOOT && p.active && p.anim.sit == 0.0f && c->door == 0.0f && c->kind == CK_PARKED);
+    CHECK(!inside_car(c, p.pos) && (all & RIDE_EV_EXITED));
+    ped_update(&p, v3(1, 0, 0), 0, 0, 0.5f);
+    CHECK(sqrtf(p.vel.x * p.vel.x + p.vel.z * p.vel.z) > 1.0f);
+    /* taking a car from traffic: the driver runs */
+    cars_clear();
+    k = car_spawn(CK_TRAFFIC, CAR_KLASYKA, v3(400, 0, -300), 0.0f, 0xFFFFFFFFu);
+    ped_init(&p, CH_ANDRIY, car_local(&cars[k], v3(-2.0f, 0, 0)), 0.0f);
+    ride_reset(&r);
+    ride_enter(&r, &p, k, 0);
+    all = 0;
+    for (i = 0; i < 600 && r.state != RIDE_DRIVE; i++) all |= ride_update(&r, &p, 1.0f / 60);
+    CHECK(all & RIDE_EV_FLEE);
+}
+
 static void test_cutscenes_and_story(void)
 {
     static Ped actors[N_ACTORS];
@@ -378,6 +432,7 @@ int main(void)
     test_car_physics();
     test_traffic();
     test_actor();
+    test_ride();
     test_cutscenes_and_story();
     test_audio();
     CHECK(cs_line_time("Тихо.") > 1.0f && cs_line_time("Мені такі люди потрібні. Робота чиста, гроші — в доларах.") > 3.5f);

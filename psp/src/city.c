@@ -295,8 +295,8 @@ static void facade(float ax, float az, float bx, float bz, float y0, int floors,
                           tile == T_PLASTER_WIN) && hf(f * 13 + b, side * 7 + (int)seed, 5) < 0.4f) {
                 GMesh *keep = M;
                 M = G;
-                gm_quad_flat(M, v3(x0 + nx * 0.04f, ya, z0 + nz * 0.04f), v3(x0 + nx * 0.04f, yb, z0 + nz * 0.04f),
-                             v3(x1 + nx * 0.04f, yb, z1 + nz * 0.04f), v3(x1 + nx * 0.04f, ya, z1 + nz * 0.04f),
+                gm_quad_flat(M, v3(x0 + nx * 0.08f, ya, z0 + nz * 0.08f), v3(x0 + nx * 0.08f, yb, z0 + nz * 0.08f),
+                             v3(x1 + nx * 0.08f, yb, z1 + nz * 0.08f), v3(x1 + nx * 0.08f, ya, z1 + nz * 0.08f),
                              uv_tile(T_WINDOW_LIT), WHITE);
                 M = keep;
             }
@@ -326,14 +326,16 @@ static void block_of_flats(float x0, float z0, float x1, float z1, int floors, P
     /* entrance canopies */
     for (f = 0; f < ndoors; f++) {
         float dx = x0 + doors[f];
-        box(dx - 1.2f, y0 + 2.5f, z1, dx + 1.2f, y0 + 2.65f, z1 + 1.3f, T_CONCRETE, T_CONCRETE, WHITE, 0);
+        gm_box(M, v3(dx - 1.2f, y0 + 2.5f, z1), v3(dx + 1.2f, y0 + 2.65f, z1 + 1.3f), uv_tile(T_CONCRETE),
+               uv_tile(T_CONCRETE), WHITE, BOX_ALL & ~32); /* no face against the wall */
     }
     /* balconies on the back (-z) side, every other bay, from the 2nd floor */
     if (balconies)
         for (f = 1; f < floors; f++)
             for (x = x0 + 3.2f * 1.5f; x < x1 - 3.0f; x += 6.4f) {
                 float ya = y0 + f * fh;
-                box(x - 1.4f, ya - 0.1f, z0 - 1.1f, x + 1.4f, ya + 0.05f, z0, T_CONCRETE, T_CONCRETE, WHITE, 0);
+                gm_box(M, v3(x - 1.4f, ya - 0.1f, z0 - 1.1f), v3(x + 1.4f, ya + 0.05f, z0), uv_tile(T_CONCRETE),
+                       uv_tile(T_CONCRETE), WHITE, BOX_ALL & ~16);
                 vquad(x + 1.4f, z0 - 1.1f, x - 1.4f, z0 - 1.1f, ya + 0.05f, ya + 1.05f, uv_tile(T_BALCONY), WHITE);
                 vquad(x - 1.4f, z0 - 1.1f, x - 1.4f, z0, ya + 0.05f, ya + 1.05f, uv_sub(T_BALCONY, 0, 22, 32, 42), WHITE);
                 vquad(x + 1.4f, z0, x + 1.4f, z0 - 1.1f, ya + 0.05f, ya + 1.05f, uv_sub(T_BALCONY, 32, 22, 32, 42), WHITE);
@@ -384,13 +386,18 @@ static void kiosk(float x, float z, int sign, int facing_neg_z)
     const float w = 2.6f, h = 2.6f, y0 = WALK_H;
     unsigned int blue = gfx_rgba(120, 170, 240, 255);
     float zf = facing_neg_z ? z : z + w;
-    box(x, y0, z, x + w, y0 + h, z + w, T_WHITE, T_METAL, blue, 1);
+    /* the shop front replaces the box face instead of floating just in front of it */
+    gm_box(M, v3(x, y0, z), v3(x + w, y0 + h, z + w), uv_tile(T_WHITE), uv_tile(T_METAL), blue,
+           BOX_NO_BOTTOM & ~(facing_neg_z ? 32 : 16));
+    add_box(x, y0, z, x + w, y0 + h, z + w);
     if (facing_neg_z) {
-        vquad(x + w, zf - 0.02f, x, zf - 0.02f, y0, y0 + h - 0.4f, uv_tile(T_KIOSK_FRONT), WHITE);
-        vquad(x + w + 0.2f, zf - 0.1f, x - 0.2f, zf - 0.1f, y0 + h - 0.3f, y0 + h + 0.7f, uv_sub(sign, 0, 16, 64, 32), WHITE);
+        vquad(x + w, zf, x, zf, y0, y0 + h - 0.4f, uv_tile(T_KIOSK_FRONT), WHITE);
+        vquad(x + w, zf, x, zf, y0 + h - 0.4f, y0 + h, uv_sub(T_KIOSK_FRONT, 0, 52, 64, 12), WHITE);
+        vquad(x + w + 0.2f, zf - 0.15f, x - 0.2f, zf - 0.15f, y0 + h - 0.3f, y0 + h + 0.7f, uv_sub(sign, 0, 16, 64, 32), WHITE);
     } else {
-        vquad(x, zf + 0.02f, x + w, zf + 0.02f, y0, y0 + h - 0.4f, uv_tile(T_KIOSK_FRONT), WHITE);
-        vquad(x - 0.2f, zf + 0.1f, x + w + 0.2f, zf + 0.1f, y0 + h - 0.3f, y0 + h + 0.7f, uv_sub(sign, 0, 16, 64, 32), WHITE);
+        vquad(x, zf, x + w, zf, y0, y0 + h - 0.4f, uv_tile(T_KIOSK_FRONT), WHITE);
+        vquad(x, zf, x + w, zf, y0 + h - 0.4f, y0 + h, uv_sub(T_KIOSK_FRONT, 0, 52, 64, 12), WHITE);
+        vquad(x - 0.2f, zf + 0.15f, x + w + 0.2f, zf + 0.15f, y0 + h - 0.3f, y0 + h + 0.7f, uv_sub(sign, 0, 16, 64, 32), WHITE);
     }
 }
 

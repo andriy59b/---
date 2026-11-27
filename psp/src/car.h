@@ -41,7 +41,8 @@ typedef struct {
     /* visuals */
     float wheel_spin, body_y, body_pitch, body_roll, pitch_v, roll_v, y_v;
     float curb_pitch, curb_roll, ax;
-    float door;           /* driver door 0..1 */
+    float door;           /* door opening 0..1 */
+    int door_side;        /* 0 left (driver), 1 right */
     unsigned int paint;
     float skid;           /* 0..1 tyre squeal amount */
     float impact;         /* strongest impact this frame (m/s) */
@@ -58,7 +59,7 @@ extern Car cars[MAX_CARS];
 void cars_clear(void);
 int  car_spawn(int kind, int type, V3 pos, float yaw, unsigned int paint);
 int  car_find_kind(int kind);
-int  car_nearest(V3 pos, float maxd);          /* enterable car */
+int  car_nearest(V3 pos, float maxd, int *side); /* enterable car and the door side closest to pos */
 float car_speed(const Car *c);                 /* signed forward speed m/s */
 
 /* One physics step for one car using its in_* inputs. */
@@ -72,7 +73,7 @@ int  cars_update(float dt, V3 focus, const V3 *player_pos, int traffic);
 
 /* Character vs cars: pushes the point out; returns impact speed if hit by a moving car. */
 float car_push_point(V3 *p, float radius);
-V3   car_door_point(const Car *c);             /* where the driver stands to get in */
+V3   car_door_point(const Car *c, int side);   /* where to stand to open a door (0 left, 1 right) */
 V3   car_seat_point(const Car *c);
 V3   car_local(const Car *c, V3 local);        /* car space -> world */
 

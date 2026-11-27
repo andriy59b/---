@@ -171,15 +171,15 @@ static void build_model(int t)
         gm_quad(D, v3(-bx, yb1, zb1), v3(-gi, H, zt1), v3(-gi, H, zt0), v3(-bx, yb0, zb0), glass, WHITE);
         gm_quad(D, v3(bx, yb0, zb0), v3(gi, H, zt0), v3(gi, H, zt1), v3(bx, yb1, zb1), glass, WHITE);
         /* B pillars and roof edges in body colour */
-        gm_quad(P, v3(-bx - 0.005f, (yb0 + yb1) * 0.5f, mid + 0.06f), v3(-gi - 0.005f, H, mid + 0.06f),
-                v3(-gi - 0.005f, H, mid - 0.06f), v3(-bx - 0.005f, (yb0 + yb1) * 0.5f, mid - 0.06f), white, WHITE);
-        gm_quad(P, v3(bx + 0.005f, (yb0 + yb1) * 0.5f, mid - 0.06f), v3(gi + 0.005f, H, mid - 0.06f),
-                v3(gi + 0.005f, H, mid + 0.06f), v3(bx + 0.005f, (yb0 + yb1) * 0.5f, mid + 0.06f), white, WHITE);
+        gm_quad(P, v3(-bx - 0.015f, (yb0 + yb1) * 0.5f, mid + 0.06f), v3(-gi - 0.015f, H, mid + 0.06f),
+                v3(-gi - 0.015f, H, mid - 0.06f), v3(-bx - 0.015f, (yb0 + yb1) * 0.5f, mid - 0.06f), white, WHITE);
+        gm_quad(P, v3(bx + 0.015f, (yb0 + yb1) * 0.5f, mid - 0.06f), v3(gi + 0.015f, H, mid - 0.06f),
+                v3(gi + 0.015f, H, mid + 0.06f), v3(bx + 0.015f, (yb0 + yb1) * 0.5f, mid + 0.06f), white, WHITE);
     }
 
     /* front details */
     {
-        float zd = zf - 0.006f, gy0 = s->bumper_h + 0.03f, gy1 = s->hood_front_h - 0.04f;
+        float zd = zf - 0.025f, gy0 = s->bumper_h + 0.03f, gy1 = s->hood_front_h - 0.04f;
         float lw = hw * 0.36f;
         quad_x(D, -hw * 0.42f, hw * 0.42f, gy0, gy1, zd,
                s->chrome_grille ? uv_sub(T_CAR_PARTS, CP_GRILLE_CHROME) : uv_sub(T_CAR_PARTS, CP_GRILLE_BLACK), 1);
@@ -198,7 +198,7 @@ static void build_model(int t)
     }
     /* rear details */
     {
-        float zd = zr + 0.006f, ty0 = s->bumper_h + 0.04f, ty1 = s->rear_h - 0.06f;
+        float zd = zr + 0.025f, ty0 = s->bumper_h + 0.04f, ty1 = s->rear_h - 0.06f;
         quad_x(D, -hw * 0.96f, -hw * 0.5f, ty0, ty1, zd, uv_sub(T_CAR_PARTS, CP_TAIL), 0);
         quad_x(D, hw * 0.5f, hw * 0.96f, ty0, ty1, zd, uv_sub(T_CAR_PARTS, CP_TAIL), 0);
         quad_x(D, -hw - 0.02f, hw + 0.02f, s->clearance + 0.04f, s->bumper_h, zd + 0.03f, uv_sub(T_CAR_PARTS, CP_BUMPER), 0);
@@ -277,17 +277,26 @@ void car_append_mesh(GMesh *out, const Car *c)
     append_painted(out, &cm->paint, &body, c->paint);
     gm_append_xf(out, &cm->detail, &body);
     {
-        Xf hinge = xf_translate(v3(-s->width * 0.5f - 0.03f, 0, zof(s, s->ws_base - 0.05f)));
-        Xf rot = xf_rot_y(-c->door * 1.15f), a = xf_mul(&body, &hinge), m = xf_mul(&a, &rot);
+        /* door on either side: the right one is the mirror image of the left */
+        float sx = c->door_side ? -1.0f : 1.0f;
+        Xf mirror = xf_identity(), hinge, rot, a1, a2, m;
+        mirror.ax = v3(sx, 0, 0);
+        hinge = xf_translate(v3(-sx * (s->width * 0.5f + 0.03f), 0, zof(s, s->ws_base - 0.05f)));
+        rot = xf_rot_y(-c->door * 1.15f);
+        a1 = xf_mul(&body, &hinge);
+        a2 = xf_mul(&a1, &mirror);
+        m = xf_mul(&a2, &rot);
         if (c->door > 0.02f) {
             /* dark cabin opening behind the swung-out door, with a seat */
             float z0 = zof(s, s->ws_base - 0.05f), z1 = z0 + s->length * 0.26f;
-            float y0 = s->clearance + 0.08f, y1 = s->height - 0.06f, x = -s->width * 0.5f - 0.012f;
+            float y0 = s->clearance + 0.08f, y1 = s->height - 0.06f, x = -sx * (s->width * 0.5f + 0.012f);
             GMesh hole;
             gm_init(&hole);
             gm_quad_flat(&hole, v3(x, y0, z1), v3(x, y1, z1), v3(x, y1, z0), v3(x, y0, z0),
                          uv_sub(T_CAR_PARTS, CP_DARK), gfx_rgba(26, 24, 24, 255));
             gm_box(&hole, v3(-s->width * 0.45f, y0 + 0.2f, z0 + 0.25f), v3(-s->width * 0.1f, y0 + 0.45f, z1 - 0.1f),
+                   uv_tile(T_WHITE), uv_tile(T_WHITE), gfx_rgba(90, 60, 50, 255), BOX_ALL);
+            gm_box(&hole, v3(s->width * 0.1f, y0 + 0.2f, z0 + 0.25f), v3(s->width * 0.45f, y0 + 0.45f, z1 - 0.1f),
                    uv_tile(T_WHITE), uv_tile(T_WHITE), gfx_rgba(90, 60, 50, 255), BOX_ALL);
             gm_append_xf(out, &hole, &body);
             gm_free(&hole);

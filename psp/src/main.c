@@ -18,6 +18,7 @@
 #include "cutscene.h"
 #include "game.h"
 #include "render.h"
+#include "ride.h"
 #include "story.h"
 #include "synth.h"
 
@@ -33,7 +34,6 @@ PSP_HEAP_SIZE_KB(-1024);
 #define MAX_EXTRAS 4
 
 enum { MODE_SPLASH, MODE_MENU, MODE_CONFIRM, MODE_SETTINGS, MODE_PLAY, MODE_PAUSE, MODE_CUTSCENE };
-enum { P_FOOT, P_ENTER_WALK, P_ENTER_OPEN, P_ENTER_IN, P_ENTER_CLOSE, P_DRIVE, P_EXIT_OPEN, P_EXIT_CLOSE };
 
 static const char LEVEL_MAGIC[8] = { 'U', 'K', 'R', 'C', 'R', '0', '0', '2' };
 
@@ -46,8 +46,11 @@ static volatile int running = 1;
 
 static int mode = MODE_SPLASH, settings_return = MODE_MENU, has_save, in_game;
 static float mode_time;
-static int pstate = P_FOOT, car_idx = -1;
-static float pstate_t;
+static Ride ride;
+#define car_idx (ride.state != RIDE_FOOT ? ride.car : -1)
+#define P_FOOT RIDE_FOOT
+#define P_DRIVE RIDE_DRIVE
+#define pstate ride.state
 static float cam_yaw, cam_pitch = -0.12f;
 static Cutscene cs;
 static float letterbox;
@@ -206,7 +209,7 @@ static void level_save(void)
     L.pos = player->pos;
     L.yaw = player->yaw;
     L.cam_yaw = cam_yaw;
-    if (car_idx >= 0) L.pos = car_door_point(&cars[car_idx]);
+    if (car_idx >= 0) L.pos = car_door_point(&cars[car_idx], 0);
     for (i = 0; i < MAX_CARS; i++)
         if (cars[i].kind != CK_FREE && cars[i].own) {
             L.car_pos = cars[i].pos;
@@ -256,8 +259,7 @@ static void begin_session(void)
     }
     if (L.story.mission == M_TAIL)
         car_spawn(CK_CHASER, CAR_GELENDER, v3(player->pos.x + 30, 0, player->pos.z), 0, KABAN_CAR_PAINT);
-    car_idx = -1;
-    pstate = P_FOOT;
+    ride_reset(&ride);
     cam_yaw = L.cam_yaw;
     cam_pitch = -0.12f;
     apply_volumes();
@@ -310,22 +312,6 @@ static void flee_driver(V3 at, float away_yaw)
         }
 }
 
-static void start_enter(int idx)
-{
-    Car *c = &cars[idx];
-    car_idx = idx;
-    pstate = P_ENTER_WALK;
-    pstate_t = 0.0f;
-    player->goal = car_door_point(c);
-    player->has_goal = 1;
-    player->walk_speed = 3.2f;
-    if (c->kind == CK_TRAFFIC) {
-        c->kind = CK_SCRIPT;
-        c->in_throttle = -1.0f;
-        c->in_steer = 0.0f;
-    }
-}
-
 static void player_drive_tick(float dt, unsigned int buttons, unsigned int pressed, const SceCtrlData *pad)
 {
     Car *c = &cars[car_idx];
@@ -344,124 +330,32 @@ static void player_drive_tick(float dt, unsigned int buttons, unsigned int press
     radio_tick();
     player->pos = car_seat_point(c);
     player->yaw = c->yaw;
-    if ((pressed & PSP_CTRL_TRIANGLE) && fabsf(car_speed(c)) < 3.0f) {
-        pstate = P_EXIT_OPEN;
-        pstate_t = 0.0f;
+    if (pressed & PSP_CTRL_TRIANGLE) {
         c->in_throttle = 0.0f;
         c->in_handbrake = 1;
-        synth_sfx(SFX_DOOR);
+        if (ride_exit(&ride, player)) {
+            synth_engine(0, 0.0f);
+            synth_music(-1);
+        }
     }
 }
 
 static void force_exit_car(void)
 {
-    if (car_idx >= 0) {
-        Car *c = &cars[car_idx];
-        player->pos = car_door_point(c);
-        c->kind = CK_PARKED;
-        c->door = 0.0f;
-    }
-    car_idx = -1;
-    pstate = P_FOOT;
-    player->active = 1;
-    player->anim.sit = 0.0f;
-    player->anim.crouch = 0.0f;
+    ride_force_out(&ride, player);
     synth_engine(0, 0.0f);
     synth_music(-1);
 }
 
-/* states of getting in and out */
-static void car_transition_tick(float dt)
+static void ride_tick(float dt)
 {
-    Car *c = car_idx >= 0 ? &cars[car_idx] : NULL;
-    pstate_t += dt;
-    if (!c) {
-        pstate = P_FOOT;
-        return;
+    int ev = ride_update(&ride, player, dt);
+    if (ev & RIDE_EV_DOOR) synth_sfx(SFX_DOOR);
+    if (ev & RIDE_EV_FLEE) {
+        flee_driver(ride.flee_pos, ride.flee_yaw);
+        show_banner("Водій утік!", NULL, 2.0f);
     }
-    switch (pstate) {
-    case P_ENTER_WALK:
-        if (!player->has_goal || pstate_t > 3.0f) {
-            V3 r = yaw_right(c->yaw);
-            player->has_goal = 0;
-            player->goal_yaw = yaw_of(r.x, r.z);
-            player->face_goal_yaw = 1;
-            player->pos = car_door_point(c);
-            pstate = P_ENTER_OPEN;
-            pstate_t = 0.0f;
-            synth_sfx(SFX_DOOR);
-        }
-        break;
-    case P_ENTER_OPEN:
-        /* reach for the handle, then pull the door open */
-        player->anim.gesture = pstate_t < 0.55f ? GEST_POINT : GEST_NONE;
-        c->door = smooth01((pstate_t - 0.25f) / 0.45f);
-        if (pstate_t >= 0.7f) {
-            if (c->kind == CK_SCRIPT && !c->own && c->type != CAR_GELENDER) {
-                flee_driver(car_local(c, v3(-CAR_SPECS[c->type].width * 0.5f - 1.2f, 0, -0.3f)), c->yaw + PI_F / 2);
-                show_banner("Водій утік!", NULL, 2.0f);
-            }
-            pstate = P_ENTER_IN;
-            pstate_t = 0.0f;
-        }
-        break;
-    case P_ENTER_IN: {
-        /* duck and slide into the seat */
-        float k = clampf(pstate_t / 0.7f, 0.0f, 1.0f);
-        player->anim.crouch = 0.7f * sinf(k * PI_F);
-        player->anim.sit = smooth01((k - 0.4f) / 0.6f);
-        player->pos = v3_lerp(car_door_point(c), car_seat_point(c), smooth01(k));
-        if (k >= 1.0f) {
-            player->active = 0;
-            pstate = P_ENTER_CLOSE;
-            pstate_t = 0.0f;
-        }
-        break;
-    }
-    case P_ENTER_CLOSE:
-        c->door = 1.0f - smooth01(pstate_t / 0.4f);
-        if (pstate_t >= 0.4f) {
-            c->kind = CK_PLAYER;
-            c->door = 0.0f;
-            player->anim.gesture = GEST_NONE;
-            pstate = P_DRIVE;
-            synth_sfx(SFX_DOOR);
-            radio_play();
-        }
-        break;
-    case P_EXIT_OPEN:
-        c->door = smooth01(pstate_t / 0.45f);
-        car_step(c, dt);
-        if (pstate_t >= 0.45f) {
-            V3 r = yaw_right(c->yaw);
-            player->active = 1;
-            player->pos = car_door_point(c);
-            player->yaw = yaw_of(-r.x, -r.z);
-            player->anim.crouch = 0.4f;
-            player->anim.sit = 0.0f;
-            player->anim.gesture = GEST_NONE;
-            player->vel = v3(0, 0, 0);
-            c->kind = CK_PARKED;
-            pstate = P_EXIT_CLOSE;
-            pstate_t = 0.0f;
-            synth_engine(0, 0.0f);
-            synth_music(-1);
-        }
-        break;
-    case P_EXIT_CLOSE:
-        /* step away, then shut the door */
-        c->door = pstate_t < 0.3f ? 1.0f : 1.0f - smooth01((pstate_t - 0.3f) / 0.4f);
-        player->anim.gesture = pstate_t > 0.25f && pstate_t < 0.5f ? GEST_POINT : GEST_NONE;
-        if (pstate_t >= 0.7f) {
-            c->door = 0.0f;
-            synth_sfx(SFX_DOOR);
-            car_idx = -1;
-            pstate = P_FOOT;
-        }
-        break;
-    default:
-        break;
-    }
+    if (ev & RIDE_EV_ENTERED) radio_play();
 }
 
 /* ----------------------------------------------------------------- story */
@@ -531,7 +425,7 @@ static void build_dynamic(V3 eye, float yaw, float radius)
         const Ped *p = &peds[i];
         V3 d;
         if (!p->active) continue;
-        if (p == player && (L.first_person || car_idx >= 0) && mode != MODE_CUTSCENE) continue;
+        if (p == player && L.first_person && pstate == P_FOOT && mode != MODE_CUTSCENE) continue;
         d = v3_sub(p->pos, eye);
         if (d.x * d.x + d.z * d.z > 90.0f * 90.0f) continue;
         ped_append_mesh(&dyn, p);
@@ -552,7 +446,7 @@ static void draw_world(V3 eye, float yaw, float pitch, const SkyState *sky, floa
             r_shadow(cars[i].pos, CAR_SPECS[cars[i].type].width * 0.62f, CAR_SPECS[cars[i].type].length * 0.58f,
                      cars[i].yaw, 0.85f);
     for (i = 0; i < N_ACTORS; i++)
-        if (peds[i].active && !(peds + i == player && car_idx >= 0))
+        if (peds[i].active)
             r_shadow(peds[i].pos, 0.42f, 0.42f, 0.0f, 0.7f);
     build_dynamic(eye, yaw, radius);
     r_mesh(&dyn, sky);
@@ -765,15 +659,13 @@ int main(void)
                 if ((ax != 0.0f || ay != 0.0f) && !L.first_person && !(buttons & (PSP_CTRL_LTRIGGER | PSP_CTRL_RTRIGGER)))
                     cam_yaw = wrap_pi(cam_yaw + wrap_pi(player->yaw - cam_yaw) * clampf(dt * 1.2f, 0.0f, 1.0f));
                 if (pressed & PSP_CTRL_TRIANGLE) {
-                    int k = car_nearest(player->pos, 4.5f);
-                    if (k >= 0) start_enter(k);
+                    int side = 0, k = car_nearest(player->pos, 4.5f, &side);
+                    if (k >= 0) ride_enter(&ride, player, k, side);
                 }
             } else if (pstate == P_DRIVE) {
                 player_drive_tick(dt, buttons, pressed, &pad);
             } else {
-                if (pstate == P_ENTER_WALK) ped_update(player, v3(0, 0, 0), 0, 0, dt);
-                else if (player->active) ped_update(player, v3(0, 0, 0), 0, 0, dt);
-                car_transition_tick(dt);
+                ride_tick(dt);
             }
 
             focus = car_idx >= 0 ? cars[car_idx].pos : player->pos;
@@ -917,7 +809,7 @@ int main(void)
                 hud.rpm = cars[car_idx].rpm;
                 hud.gear = cars[car_idx].gear;
                 hud.hint = "✕ газ  □ гальмо  ○ ручник  △ вийти  ↑ сигнал  ←→ радіо";
-            } else if (pstate == P_FOOT && car_nearest(player->pos, 4.5f) >= 0) {
+            } else if (pstate == P_FOOT && car_nearest(player->pos, 4.5f, NULL) >= 0) {
                 hud.hint = "△ — сісти в машину";
             }
             hud.radio_text = radio_buf;

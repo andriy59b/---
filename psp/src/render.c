@@ -28,7 +28,8 @@ typedef struct { unsigned int color; float x, y, z; } CVertex;
 #define VT_C2D (GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_2D)
 
 static unsigned int __attribute__((aligned(16))) gu_list[512 * 1024];
-static unsigned int *atlas_tex;
+#define MIP_LEVELS 4   /* 512, 256, 128, 64 */
+static unsigned int *atlas_mip[MIP_LEVELS];
 static unsigned int *font_tex;
 static int bound_tex;
 
@@ -61,8 +62,13 @@ static void swizzle(unsigned char *out, const unsigned char *in, unsigned int wi
 static void bind_atlas(void)
 {
     if (bound_tex != 1) {
-        sceGuTexMode(GU_PSM_8888, 0, 0, 1);
-        sceGuTexImage(0, TEX_SIZE, TEX_SIZE, TEX_SIZE, atlas_tex);
+        int l;
+        /* mip-mapped: far surfaces use smaller copies instead of shimmering */
+        sceGuTexMode(GU_PSM_8888, MIP_LEVELS - 1, 0, 1);
+        for (l = 0; l < MIP_LEVELS; l++)
+            sceGuTexImage(l, TEX_SIZE >> l, TEX_SIZE >> l, TEX_SIZE >> l, atlas_mip[l]);
+        sceGuTexLevelMode(GU_TEXTURE_AUTO, 0.0f);
+        sceGuTexFilter(GU_LINEAR_MIPMAP_LINEAR, GU_NEAREST);
         sceGuTexFlush();
         bound_tex = 1;
     }
@@ -75,6 +81,7 @@ static void bind_font(void)
     if (bound_tex != 2) {
         sceGuTexMode(GU_PSM_8888, 0, 0, 0);
         sceGuTexImage(0, FONT_TEX_W, FONT_TEX_H, FONT_TEX_W, font_tex);
+        sceGuTexFilter(GU_NEAREST, GU_NEAREST);
         sceGuTexFlush();
         bound_tex = 2;
     }
@@ -98,8 +105,29 @@ void r_init(void)
 
     linear = (unsigned int *)memalign(16, TEX_SIZE * TEX_SIZE * 4);
     texgen_atlas(linear);
-    atlas_tex = (unsigned int *)memalign(16, TEX_SIZE * TEX_SIZE * 4);
-    swizzle((unsigned char *)atlas_tex, (const unsigned char *)linear, TEX_SIZE * 4, TEX_SIZE);
+    {
+        int l, size = TEX_SIZE;
+        for (l = 0; l < MIP_LEVELS; l++, size >>= 1) {
+            if (l > 0) {
+                /* 2x2 box filter of the previous level, in place */
+                int x, y, c, prev = size * 2;
+                for (y = 0; y < size; y++)
+                    for (x = 0; x < size; x++) {
+                        unsigned int out = 0;
+                        for (c = 0; c < 32; c += 8) {
+                            unsigned int sum = ((linear[(2 * y) * prev + 2 * x] >> c) & 0xFF) +
+                                               ((linear[(2 * y) * prev + 2 * x + 1] >> c) & 0xFF) +
+                                               ((linear[(2 * y + 1) * prev + 2 * x] >> c) & 0xFF) +
+                                               ((linear[(2 * y + 1) * prev + 2 * x + 1] >> c) & 0xFF);
+                            out |= ((sum + 2) / 4) << c;
+                        }
+                        linear[y * size + x] = out;
+                    }
+            }
+            atlas_mip[l] = (unsigned int *)memalign(16, (size_t)size * size * 4);
+            swizzle((unsigned char *)atlas_mip[l], (const unsigned char *)linear, (unsigned int)size * 4, (unsigned int)size);
+        }
+    }
     free(linear);
 
     font_tex = (unsigned int *)memalign(16, FONT_TEX_W * FONT_TEX_H * 4);
@@ -124,7 +152,7 @@ void r_init(void)
     sceGuEnable(GU_TEXTURE_2D);
     sceGuTexFunc(GU_TFX_MODULATE, GU_TCC_RGBA);
     /* sharp pixels up close, smoothed when minified so distant ground does not shimmer */
-    sceGuTexFilter(GU_LINEAR, GU_NEAREST);
+    sceGuTexFilter(GU_LINEAR_MIPMAP_LINEAR, GU_NEAREST);
     sceGuTexWrap(GU_CLAMP, GU_CLAMP);
     sceGuAlphaFunc(GU_GREATER, 0x80, 0xFF);
     sceGuEnable(GU_ALPHA_TEST);
@@ -340,7 +368,7 @@ void r_shadow(V3 p, float hw, float hl, float yaw, float alpha)
         v[i].v = w[k];
         v[i].color = col;
         v[i].x = c[k].x;
-        v[i].y = p.y + 0.03f;
+        v[i].y = p.y + 0.06f;
         v[i].z = c[k].z;
     }
     bind_atlas();
