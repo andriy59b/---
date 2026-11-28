@@ -28,6 +28,8 @@ typedef struct {
     GMesh solid;   /* opaque + alpha-tested */
     GMesh glow;    /* lit windows, faded in at night */
     float cx, cz;  /* centre */
+    GChunk *chunks; /* runs of nearby triangles of solid, for cutting near the camera */
+    int nchunks;
 } CityCell;
 
 void city_build(unsigned int seed);   /* builds all geometry and collision */

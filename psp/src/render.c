@@ -113,8 +113,7 @@ static void draw_verts(const GVertex *v, int n)
     }
 }
 
-/* draws n vertices, cut to the cone first if any reach outside it */
-static void draw_clipped(const GVertex *v, int n)
+static void draw_cut(const GVertex *v, int n)
 {
     int m = clip_buf ? gm_cone_clip(v, n, &cam_cone, clip_buf + clip_used, CLIP_CAP - clip_used) : -1;
     if (m < 0) {
@@ -125,6 +124,34 @@ static void draw_clipped(const GVertex *v, int n)
         clip_used += m;
     }
 }
+
+/* Draws a mesh near the camera chunk by chunk: chunks inside the cone go
+ * straight from the mesh (consecutive ones in one call), chunks outside it
+ * (behind the camera) are skipped, only those on its edge are cut. */
+static void draw_chunked(const GVertex *v, const GChunk *ch, int nch)
+{
+    int i, run_first = -1, run_end = 0;
+    for (i = 0; i < nch; i++) {
+        int k = view_cone_sphere(&cam_cone, ch[i].c, ch[i].r);
+        if (k > 0) {
+            if (run_first >= 0 && run_end == ch[i].first) {
+                run_end += ch[i].count;
+            } else {
+                if (run_first >= 0) draw_verts(v + run_first, run_end - run_first);
+                run_first = ch[i].first;
+                run_end = run_first + ch[i].count;
+            }
+            continue;
+        }
+        if (run_first >= 0) draw_verts(v + run_first, run_end - run_first);
+        run_first = -1;
+        if (k == 0) draw_cut(v + ch[i].first, ch[i].count);
+    }
+    if (run_first >= 0) draw_verts(v + run_first, run_end - run_first);
+}
+
+#define DYN_CHUNKS 4096
+static GChunk dyn_chunks[DYN_CHUNKS];
 
 /* ------------------------------------------------------------------- init */
 
@@ -342,8 +369,10 @@ void r_city(V3 eye, float yaw, float pitch, float radius, const SkyState *s)
             if (view_cone_contains(&cam_cone, v3(c->cx - LOT * 0.5f, -1.0f, c->cz - LOT * 0.5f),
                                    v3(c->cx + LOT * 0.5f, 60.0f, c->cz + LOT * 0.5f)))
                 draw_verts(c->solid.v, c->solid.n);
+            else if (c->nchunks)
+                draw_chunked(c->solid.v, c->chunks, c->nchunks); /* near the camera */
             else
-                draw_clipped(c->solid.v, c->solid.n); /* near the camera */
+                draw_cut(c->solid.v, c->solid.n);
         }
     sceGuDisable(GU_FOG);
 }
@@ -387,7 +416,11 @@ void r_mesh(const GMesh *m, const SkyState *s)
     sceGuFog(s->fog_start, s->fog_end, s->fog);
     sceGumMatrixMode(GU_MODEL);
     sceGumLoadIdentity();
-    draw_clipped(m->v, m->n);
+    {
+        int nc = gm_chunks(m->v, m->n, dyn_chunks, DYN_CHUNKS);
+        if (nc > 0) draw_chunked(m->v, dyn_chunks, nc);
+        else draw_cut(m->v, m->n);
+    }
     sceGuDisable(GU_FOG);
 }
 

@@ -487,6 +487,16 @@ static float pursue(const Car *c, V3 target)
     return clampf(delta / s->max_steer, -1.0f, 1.0f);
 }
 
+static V3 walkers[16];
+static int nwalkers;
+
+void cars_set_walkers(const V3 *pos, int n)
+{
+    int i;
+    nwalkers = n < 16 ? n : 16;
+    for (i = 0; i < nwalkers; i++) walkers[i] = pos[i];
+}
+
 static float obstacle_ahead(const Car *c, const V3 *player, int *by_player)
 {
     V3 f = yaw_fwd(c->yaw), r = yaw_right(c->yaw);
@@ -497,6 +507,11 @@ static float obstacle_ahead(const Car *c, const V3 *player, int *by_player)
         V3 d = v3_sub(*player, c->pos);
         float a = v3_dot(d, f), sd = v3_dot(d, r);
         if (a > 0.0f && fabsf(sd) < 1.6f && a < best) { best = a; *by_player = 1; }
+    }
+    for (i = 0; i < nwalkers; i++) {
+        V3 d = v3_sub(walkers[i], c->pos);
+        float a = v3_dot(d, f), sd = v3_dot(d, r);
+        if (a > 0.0f && fabsf(sd) < 1.5f && a < best) { best = a; *by_player = 0; }
     }
     for (i = 0; i < MAX_CARS; i++) {
         const Car *o = &cars[i];

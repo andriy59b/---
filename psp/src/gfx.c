@@ -270,3 +270,59 @@ int gm_cone_clip(const GVertex *v, int n, const ViewCone *c, GVertex *out, int c
     }
     return count;
 }
+
+/* ---------------------------------------------------------------- chunks */
+
+#define CHUNK_TRIS 48
+#define CHUNK_SIZE 8.0f
+
+static void chunk_close(GChunk *ch, V3 lo, V3 hi)
+{
+    ch->c = v3_scale(v3_add(lo, hi), 0.5f);
+    ch->r = v3_len(v3_sub(hi, lo)) * 0.5f + 0.01f;
+}
+
+int gm_chunks(const GVertex *v, int n, GChunk *out, int cap)
+{
+    int t, i, nc = 0;
+    V3 lo = v3(0, 0, 0), hi = v3(0, 0, 0);
+    for (t = 0; t + 2 < n; t += 3) {
+        V3 tlo = v3(v[t].x, v[t].y, v[t].z), thi = tlo;
+        for (i = 1; i < 3; i++) {
+            const GVertex *g = &v[t + i];
+            tlo = v3(fminf(tlo.x, g->x), fminf(tlo.y, g->y), fminf(tlo.z, g->z));
+            thi = v3(fmaxf(thi.x, g->x), fmaxf(thi.y, g->y), fmaxf(thi.z, g->z));
+        }
+        if (nc > 0 && out[nc - 1].count < CHUNK_TRIS * 3) {
+            V3 a = v3(fminf(lo.x, tlo.x), fminf(lo.y, tlo.y), fminf(lo.z, tlo.z));
+            V3 b = v3(fmaxf(hi.x, thi.x), fmaxf(hi.y, thi.y), fmaxf(hi.z, thi.z));
+            if (b.x - a.x <= CHUNK_SIZE && b.y - a.y <= CHUNK_SIZE && b.z - a.z <= CHUNK_SIZE) {
+                out[nc - 1].count += 3;
+                lo = a;
+                hi = b;
+                continue;
+            }
+        }
+        if (nc > 0) chunk_close(&out[nc - 1], lo, hi);
+        if (nc >= cap) return -1;
+        out[nc].first = t;
+        out[nc].count = 3;
+        lo = tlo;
+        hi = thi;
+        nc++;
+    }
+    if (nc > 0) chunk_close(&out[nc - 1], lo, hi);
+    return nc;
+}
+
+int view_cone_sphere(const ViewCone *c, V3 centre, float r)
+{
+    float e[4], m = r * sqrtf(c->k * c->k + 1.0f);
+    int k, inside = 1;
+    cone_dist(c, centre, e);
+    for (k = 0; k < 4; k++) {
+        if (e[k] < -m) return -1;
+        if (e[k] < m) inside = 0;
+    }
+    return inside;
+}

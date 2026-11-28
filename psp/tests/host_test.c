@@ -8,6 +8,7 @@
 #include "../src/actor.h"
 #include "../src/car.h"
 #include "../src/city.h"
+#include "../src/crowd.h"
 #include "../src/cutscene.h"
 #include "../src/ride.h"
 #include "../src/story.h"
@@ -433,6 +434,131 @@ static void test_ride(void)
     }
 }
 
+
+/* passers-by: walk the pavements, run or fight, get knocked down */
+static void test_crowd(void)
+{
+    const float dt = 1.0f / 60;
+    Ped player;
+    int t, i, n, ev, all, inside = 0, moved = 0;
+    V3 start[CROWD_MAX];
+    cars_clear();
+    crowd_reset(7u);
+    ped_init(&player, CH_ANDRIY, v3(30.0f, WALK_H, 1.5f), 0.0f);
+    for (t = 0; t < 60 * 2; t++) crowd_update(dt, &player, player.pos, 1);
+    for (i = 0, n = 0; i < CROWD_MAX; i++) {
+        if (crowd[i].state == WK_FREE) continue;
+        n++;
+        start[i] = crowd[i].ped.pos;
+        CHECK(crowd[i].ped.who >= CH_FIRST_PASSER && crowd[i].ped.who < CH_COUNT);
+    }
+    CHECK(n >= 8);
+    for (t = 0; t < 60 * 30; t++) {
+        crowd_update(dt, &player, player.pos, 1);
+        for (i = 0; i < CROWD_MAX; i++)
+            if (crowd[i].state != WK_FREE && point_blocked(crowd[i].ped.pos, 0.2f)) inside++;
+    }
+    for (i = 0; i < CROWD_MAX; i++)
+        if (crowd[i].state != WK_FREE && v3_len(v3_sub(crowd[i].ped.pos, start[i])) > 3.0f) moved++;
+    printf("crowd: %d walking, %d moved, %d frames inside walls\n", n, moved, inside);
+    CHECK(moved >= 4);
+    CHECK(inside < 60 * 30 / 10);
+
+    /* a timid passer-by runs after one punch; a tough one fights back and
+     * goes down after five; both get up again */
+    crowd_reset(3u);
+    for (i = 0; i < 2; i++) {
+        Walker *w = &crowd[i];
+        memset(w, 0, sizeof(*w));
+        ped_init(&w->ped, i ? CH_VOVAN : CH_OLIA, v3(200.0f + i * 20.0f, 0.0f, -300.0f), PI_F);
+        w->state = WK_WANDER;
+        w->hp = i ? 6 : 3;
+    }
+    ped_init(&player, CH_ANDRIY, v3(200.0f, 0.0f, -300.0f + 0.85f), 0.0f);  /* facing -z, at Olia */
+    all = 0;
+    ped_punch(&player);
+    for (t = 0; t < 30; t++)
+        if (ped_update(&player, v3(0, 0, 0), 0, 0, dt) & PED_EV_PUNCH) all |= crowd_player_punch(&player);
+    CHECK(all & CROWD_EV_HIT);
+    CHECK(crowd[0].state == WK_FLEE);
+    for (t = 0; t < 60 * 3; t++) crowd_update(dt, &player, player.pos, 0);
+    CHECK(v3_len(v3_sub(crowd[0].ped.pos, player.pos)) > 6.0f);
+
+    player.pos = v3(220.0f, 0.0f, -300.0f + 0.85f);
+    player.punch_t = -1.0f;
+    all = 0;
+    for (t = 0; t < 60 * 8 && crowd[1].state != WK_DOWN; t++) {
+        if (player.punch_t < 0.0f) ped_punch(&player);
+        if (ped_update(&player, v3(0, 0, 0), 0, 0, dt) & PED_EV_PUNCH) all |= crowd_player_punch(&player);
+        player.yaw = yaw_of(crowd[1].ped.pos.x - player.pos.x, crowd[1].ped.pos.z - player.pos.z);
+        all |= crowd_update(dt, &player, player.pos, 0);
+        if (getenv("UC_DEBUG_CROWD") && t % 6 == 0)
+            printf("  t %.2f st %d hp %d dist %.2f cd %.2f punch_t %.2f yaw %.2f\n", t * dt, crowd[1].state, crowd[1].hp,
+                   v3_len(v3_sub(crowd[1].ped.pos, player.pos)), crowd[1].punch_cd, crowd[1].ped.punch_t, crowd[1].ped.yaw);
+    }
+    CHECK(crowd[1].state == WK_DOWN);
+    printf("crowd: tough one down after %.1f s, %s\n", t * dt, (all & CROWD_EV_PLAYER_HIT) ? "hit back" : "never hit back");
+    CHECK(all & CROWD_EV_PLAYER_HIT);
+    for (t = 0; t < 60 * 8; t++) crowd_update(dt, &player, player.pos, 0);
+    CHECK(crowd[1].state != WK_DOWN && crowd[1].ped.anim.knock < 0.1f);
+
+    /* a fighter keeps at it until the player goes down */
+    crowd[1].state = WK_FIGHT;
+    crowd[1].t = 0.0f;
+    crowd[1].ped.fight_mode = 1;
+    crowd[1].ped.pos = v3(player.pos.x, 0.0f, player.pos.z - 2.0f);
+    all = 0;
+    for (t = 0; t < 60 * 20 && !(all & CROWD_EV_PLAYER_DOWN); t++) {
+        all |= crowd_update(dt, &player, player.pos, 0);
+        ped_update(&player, v3(0, 0, 0), 0, 0, dt);
+    }
+    CHECK(all & CROWD_EV_PLAYER_DOWN);
+    CHECK(player.knock_t > 0.0f);
+
+    /* run over: knocked down by a car, gets up later */
+    crowd_reset(5u);
+    cars_clear();
+    {
+        Walker *w = &crowd[0];
+        int k = car_spawn(CK_PARKED, CAR_KLASYKA, v3(300.0f, 0.0f, -300.0f), -PI_F / 2, 0xFFFFFFFFu); /* facing +x */
+        Car *c = &cars[k];
+        ped_init(&w->ped, CH_PETRO, v3(306.0f, 0.0f, -300.0f), 0.0f);
+        w->state = WK_WANDER;
+        w->hp = 3;
+        c->kind = CK_SCRIPT;
+        c->vel = v3_scale(yaw_fwd(c->yaw), 11.0f);
+        all = 0;
+        for (t = 0; t < 60 * 2; t++) {
+            c->in_throttle = 0.3f;
+            car_step(c, dt);
+            all |= crowd_update(dt, NULL, w->ped.pos, 0);
+        }
+        CHECK(all & CROWD_EV_RUN_OVER);
+        CHECK(w->state == WK_DOWN && w->ped.anim.knock > 0.5f);
+        c->vel = v3(0, 0, 0);
+        c->pos = v3(330.0f, 0.0f, -330.0f);
+        for (t = 0; t < 60 * 10; t++) crowd_update(dt, NULL, w->ped.pos, 0);
+        CHECK(w->state != WK_DOWN);
+    }
+    /* traffic stops for a passer-by crossing in front */
+    {
+        Car *c;
+        V3 wp = v3(44.0f, 0.0f, 10.5f);
+        cars_clear();
+        c = &cars[car_spawn(CK_TRAFFIC, CAR_KLASYKA, v3(18.0f, 0, 10.5f), -PI_F / 2, 0xFFFFFFFFu)];
+        c->dir = 0;
+        c->next_dir = 0;
+        c->vel = v3(10.0f, 0, 0);
+        cars_set_walkers(&wp, 1);
+        for (t = 0; t < 60 * 6; t++) cars_update(dt, v3(30, 0, 30), NULL, 0);
+        CHECK(c->pos.x < 44.0f - 3.0f && car_speed(c) < 0.5f);
+        cars_set_walkers(NULL, 0);
+    }
+    (void)ev;
+    cars_clear();
+    crowd_reset(1u);
+}
+
 static void test_cutscenes_and_story(void)
 {
     static Ped actors[N_ACTORS];
@@ -561,6 +687,7 @@ int main(void)
     test_actor();
     test_ride();
     test_car_doors();
+    test_crowd();
     test_cutscenes_and_story();
     test_audio();
     CHECK(cs_line_time("Тихо.") > 1.0f && cs_line_time("Мені такі люди потрібні. Робота чиста, гроші — в доларах.") > 3.5f);

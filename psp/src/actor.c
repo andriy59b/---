@@ -9,15 +9,30 @@
 
 #define WHITE 0xFFFFFFFFu
 
-/*  name       face          h      w     top tile         fx fw  top tint     pants tile        pants tint   skin         hair         shoes        hat skirt pitch formant */
+/* ABGR colours. Columns: name, face, height, width, top (tile, front x/w, tint), trousers or skirt
+ * (tile, tint), skin, hair, shoes, hat (kind, tint), hair style, skirt, temper, voice pitch, formant */
 const Look LOOKS[CH_COUNT] = {
-    { "Андрій",    FACE_ANDRIY, 1.00f, 1.00f, T_CLOTH_ARMY,     0, 64, 0xFFFFFFFFu, T_CLOTH_DENIM,    0xFFFFFFFFu, 0xFF8CB0DCu, 0xFF203048u, 0xFF303438u, 0, 0, 118.0f, 1.00f },
-    { "Тарас",     FACE_TARAS,  0.98f, 1.06f, T_CLOTH_OVERALLS, 0, 64, 0xFFFFFFFFu, T_CLOTH_OVERALLS, 0xFFFFFFFFu, 0xFF7CA0D0u, 0xFF283850u, 0xFF2A3A50u, 1, 0, 102.0f, 0.95f },
-    { "Тітка Галя", FACE_GALYA, 0.93f, 1.12f, T_CLOTH_DRESS,    0, 64, 0xFFFFFFFFu, T_CLOTH_DRESS,    0xFFFFFFFFu, 0xFF94B8E4u, 0xFF4060A0u, 0xFF203048u, 2, 1, 215.0f, 1.18f },
-    { "Кабан",     FACE_KABAN,  1.05f, 1.25f, T_CLOTH_BLAZER,   0, 32, 0xFFFFFFFFu, T_CLOTH_SHIRT,    0xFF262626u, 0xFF7098D0u, 0xFF303030u, 0xFF181818u, 0, 0,  86.0f, 0.88f },
-    { "Продавець", FACE_SELLER, 0.97f, 0.98f, T_CLOTH_SHIRT,    0, 64, 0xFFB09070u, T_CLOTH_DENIM,    0xFFFFFFFFu, 0xFF88ACD8u, 0xFF505868u, 0xFF404448u, 0, 0, 135.0f, 1.02f },
-    { "Браток",    FACE_THUG,   1.02f, 1.10f, T_CLOTH_LEATHER,  0, 64, 0xFFFFFFFFu, T_CLOTH_TRACK,    0xFF3A3A3Au, 0xFF80A4D4u, 0xFF181818u, 0xFFE8E8E8u, 0, 0,  96.0f, 0.92f },
+    { "Андрій",      FACE_ANDRIY,   1.00f, 1.00f, T_CLOTH_ARMY,     0, 64, 0xFFFFFFFFu, T_CLOTH_DENIM,    0xFFFFFFFFu, 0xFF8CB0DCu, 0xFF203048u, 0xFF303438u, HAT_NONE,   0,           HAIR_SHORT, 0, TEMPER_FIGHT, 118.0f, 1.00f },
+    { "Тарас",       FACE_TARAS,    0.98f, 1.06f, T_CLOTH_OVERALLS, 0, 64, 0xFFFFFFFFu, T_CLOTH_OVERALLS, 0xFFFFFFFFu, 0xFF7CA0D0u, 0xFF283850u, 0xFF2A3A50u, HAT_CAP,    0xFF5A3A2Au, HAIR_SHORT, 0, TEMPER_FIGHT, 102.0f, 0.95f },
+    { "Тітка Галя",  FACE_GALYA,    0.93f, 1.12f, T_CLOTH_DRESS,    0, 64, 0xFFFFFFFFu, T_CLOTH_DRESS,    0xFFFFFFFFu, 0xFF94B8E4u, 0xFF4060A0u, 0xFF203048u, HAT_SCARF,  0xFFFFFFFFu, HAIR_SHORT, 1, TEMPER_FIGHT, 215.0f, 1.18f },
+    { "Кабан",       FACE_KABAN,    1.05f, 1.25f, T_CLOTH_BLAZER,   0, 32, 0xFFFFFFFFu, CLOTH_SHIRT,      0xFF262626u, 0xFF7098D0u, 0xFF303030u, 0xFF181818u, HAT_NONE,   0,           HAIR_BALD,  0, TEMPER_FIGHT,  86.0f, 0.88f },
+    { "Продавець",   FACE_SELLER,   0.97f, 0.98f, CLOTH_SHIRT,      0, 64, 0xFFB09070u, T_CLOTH_DENIM,    0xFFFFFFFFu, 0xFF88ACD8u, 0xFF505868u, 0xFF404448u, HAT_NONE,   0,           HAIR_SHORT, 0, TEMPER_FLEE,  135.0f, 1.02f },
+    { "Браток",      FACE_THUG,     1.02f, 1.10f, T_CLOTH_LEATHER,  0, 64, 0xFFFFFFFFu, T_CLOTH_TRACK,    0xFF3A3A3Au, 0xFF80A4D4u, 0xFF181818u, 0xFFE8E8E8u, HAT_NONE,   0,           HAIR_BUZZ,  0, TEMPER_FIGHT,  96.0f, 0.92f },
+    /* passers-by */
+    { "Баба Надя",   FACE_NADIA,    0.88f, 1.10f, T_CLOTH_KNIT,     0, 64, 0xFF4A6A8Au, T_CLOTH_DRESS,    0xFF6A5A58u, 0xFF98B4D8u, 0xFFB8B8B8u, 0xFF283038u, HAT_SCARF,  0xFFFFFFFFu, HAIR_SHORT, 1, TEMPER_FIGHT, 230.0f, 1.20f },
+    { "Дід Петро",   FACE_PETRO,    0.95f, 1.00f, CLOTH_SHIRT,      0, 64, 0xFF5A6A74u, T_CLOTH_DENIM,    0xFF506070u, 0xFF809CC8u, 0xFFC8C8C8u, 0xFF303030u, HAT_CAP,    0xFF404850u, HAIR_SHORT, 0, TEMPER_FLEE,   95.0f, 0.90f },
+    { "Оля",         FACE_OLIA,     0.94f, 0.90f, T_CLOTH_DENIM,    0, 64, 0xFFE0D8D0u, T_CLOTH_DENIM,    0xFF483830u, 0xFF9CC0ECu, 0xFF60B8E0u, 0xFFE0E0E0u, HAT_NONE,   0,           HAIR_LONG,  0, TEMPER_FLEE,  225.0f, 1.20f },
+    { "Вован",       FACE_VOVAN,    1.00f, 1.05f, T_CLOTH_TRACK,    0, 64, 0xFF803020u, T_CLOTH_TRACK,    0xFF803020u, 0xFF84A8D8u, 0xFF384048u, 0xFFF0F0F0u, HAT_CAP,    0xFF202020u, HAIR_BUZZ,  0, TEMPER_FIGHT, 105.0f, 0.95f },
+    { "Степанович",  FACE_STEPAN,   1.02f, 1.14f, CLOTH_SHIRT,      0, 64, 0xFF806858u, CLOTH_SHIRT,      0xFF503828u, 0xFF7898C8u, 0xFF203040u, 0xFF181818u, HAT_POLICE, 0xFF503020u, HAIR_SHORT, 0, TEMPER_FIGHT,  92.0f, 0.90f },
+    { "Ірина",       FACE_IRYNA,    0.97f, 0.94f, T_CLOTH_BLAZER,   0, 32, 0xFF3030B8u, CLOTH_SHIRT,      0xFF242424u, 0xFF94B4E0u, 0xFF102038u, 0xFF181818u, HAT_NONE,   0,           HAIR_LONG,  1, TEMPER_FLEE,  210.0f, 1.15f },
+    { "Михайло",     FACE_MYKHAILO, 1.03f, 1.16f, T_CLOTH_KNIT,     0, 64, 0xFF3A5A3Au, T_CLOTH_OVERALLS, 0xFF707070u, 0xFF6C90C0u, 0xFF283038u, 0xFF283038u, HAT_BEANIE, 0xFF303438u, HAIR_SHORT, 0, TEMPER_FIGHT,  90.0f, 0.88f },
+    { "Петрик",      FACE_PETRYK,   0.72f, 0.86f, T_CLOTH_TRACK,    0, 64, 0xFF2020C0u, T_CLOTH_DENIM,    0xFFFFFFFFu, 0xFFA0C4ECu, 0xFF4090C8u, 0xFF3048A0u, HAT_NONE,   0,           HAIR_SHORT, 0, TEMPER_FLEE,  260.0f, 1.30f },
 };
+
+static UVRect cloth_uv(int tile)
+{
+    return tile == CLOTH_SHIRT ? uv_sub(T_HAIR, SC_SHIRT) : uv_tile(tile);
+}
 
 typedef struct {
     int parent;
@@ -257,6 +272,33 @@ void anim_pose(const AnimState *a, Pose *o)
         gesture_pose(a, &extra);
         blend_arms(o, &extra, a->gesture_w);
     }
+    /* fists up, and the punch itself: the arm shoots forward from the guard
+     * while the shoulders turn into it */
+    if (a->fight > 0.0f || a->punch > 0.0f) {
+        float g = a->fight > a->punch ? a->fight : a->punch, k = a->punch, side = a->punch_arm ? 1.0f : -1.0f;
+        int ua = a->punch_arm ? B_UARM_R : B_UARM_L, fa = a->punch_arm ? B_FARM_R : B_FARM_L;
+        extra = *o;
+        set(&extra, B_UARM_L, 0.35f, 0.3f, 0.1f);
+        set(&extra, B_UARM_R, 0.35f, -0.3f, -0.1f);
+        set(&extra, B_FARM_L, 1.75f, 0.0f, 0.0f);
+        set(&extra, B_FARM_R, 1.75f, 0.0f, 0.0f);
+        set(&extra, B_HAND_L, 0.0f, 0.0f, 0.0f);
+        set(&extra, B_HAND_R, 0.0f, 0.0f, 0.0f);
+        extra.rx[ua] = lerpf(0.35f, 1.5f, k);
+        extra.ry[ua] = lerpf(-0.3f * side, -0.1f * side, k);
+        extra.rx[fa] = lerpf(1.75f, 0.1f, k);
+        blend_arms(o, &extra, g);
+        o->ry[B_SPINE] += 0.4f * side * k;
+        o->ry[B_PELVIS] += 0.12f * side * k;
+        o->rx[B_SPINE] -= 0.08f * g;
+        o->rx[B_HEAD] += 0.08f * g;
+    }
+    if (a->hurt > 0.0f) {
+        o->rx[B_SPINE] += 0.35f * a->hurt;
+        o->rx[B_HEAD] += 0.3f * a->hurt;
+        o->rz[B_UARM_L] -= 0.4f * a->hurt;
+        o->rz[B_UARM_R] += 0.4f * a->hurt;
+    }
     o->rx[B_HEAD] += a->head_pitch;
     o->ry[B_HEAD] += a->head_yaw;
     o->root_roll = a->lean;
@@ -299,11 +341,25 @@ void ped_bones(const Ped *p, const Pose *pose, Xf out[BONES])
     }
 }
 
+static UVRect top_front_uv(const Look *L)
+{
+    return L->top_tile == CLOTH_SHIRT ? uv_sub(T_HAIR, SC_SHIRT) : uv_sub(L->top_tile, L->top_front_x, 0, L->top_front_w, 64);
+}
+
+static UVRect top_side_uv(const Look *L)
+{
+    if (L->top_tile == CLOTH_SHIRT) return uv_sub(T_HAIR, SC_SHIRT);
+    if (L->top_front_w < 64) return uv_sub(L->top_tile, 32, 0, 32, 64);
+    if (L->top_tile == T_CLOTH_ARMY) return uv_sub(L->top_tile, 0, 26, 24, 38);
+    return uv_tile(L->top_tile);
+}
+
 /* face sub-rect in pixels of the character's face cell */
 static UVRect face_sub(int face, int open, int x, int y, int w, int h)
 {
-    int tile = T_FACES_A + face / 2;
-    return uv_sub(tile, (open ? 32 : 0) + x, (face % 2) * 32 + y, w, h);
+    int tile, fx, fy;
+    face_cell(face, open, &tile, &fx, &fy);
+    return uv_sub(tile, fx + x, fy + y, w, h);
 }
 
 static void part(GMesh *m, const Xf *xf, const Look *L, int bone, const UVRect uv[6], unsigned int tint, float grow)
@@ -321,42 +377,41 @@ static void all6(UVRect uv[6], UVRect r)
     for (i = 0; i < 6; i++) uv[i] = r;
 }
 
-void ped_append_mesh(GMesh *m, const Ped *p)
+static void mesh_boxes(GMesh *m, const Ped *p)
 {
     const Look *L = &LOOKS[p->who];
     Pose pose;
     Xf bones[BONES];
     UVRect uv[6];
-    UVRect top_front = uv_sub(L->top_tile, L->top_front_x, 0, L->top_front_w, 64);
-    UVRect top_side = L->top_front_w < 64 ? uv_sub(L->top_tile, 32, 0, 32, 64)
-                    : L->top_tile == T_CLOTH_ARMY ? uv_sub(L->top_tile, 0, 26, 24, 38) : uv_tile(L->top_tile);
+    UVRect top_front = top_front_uv(L), top_side = top_side_uv(L);
     UVRect skin = uv_sub(T_WHITE, 8, 8, 16, 16);
     int open = p->anim.mouth > 0.35f, b;
 
     anim_pose(&p->anim, &pose);
     ped_bones(p, &pose, bones);
+    (void)top_front;
 
     /* pelvis and legs */
-    all6(uv, uv_tile(L->pants_tile));
+    all6(uv, cloth_uv(L->pants_tile));
     part(m, &bones[B_PELVIS], L, B_PELVIS, uv, L->pants_tint, 0.0f);
     for (b = B_THIGH_L; b <= B_THIGH_R; b += 3) {
         if (L->skirt) {
-            all6(uv, uv_tile(L->top_tile));
-            part(m, &bones[b], L, b, uv, L->top_tint, 0.03f);
+            all6(uv, cloth_uv(L->pants_tile));
+            part(m, &bones[b], L, b, uv, L->pants_tint, 0.03f);
             all6(uv, skin);
             part(m, &bones[b + 1], L, b + 1, uv, gfx_mul(L->skin, 0.85f), 0.0f);
         } else {
-            all6(uv, uv_tile(L->pants_tile));
+            all6(uv, cloth_uv(L->pants_tile));
             part(m, &bones[b], L, b, uv, L->pants_tint, 0.0f);
             part(m, &bones[b + 1], L, b + 1, uv, L->pants_tint, 0.0f);
         }
-        all6(uv, uv_tile(T_SHOE));
+        all6(uv, uv_sub(T_HAIR, SC_SHOE));
         part(m, &bones[b + 2], L, b + 2, uv, L->shoes, 0.0f);
     }
     if (L->skirt) {
         /* skirt around the hips */
-        all6(uv, uv_tile(L->top_tile));
-        part(m, &bones[B_PELVIS], L, B_PELVIS, uv, L->top_tint, 0.04f);
+        all6(uv, cloth_uv(L->pants_tile));
+        part(m, &bones[B_PELVIS], L, B_PELVIS, uv, L->pants_tint, 0.04f);
     }
 
     /* torso: chest front shows the outfit's front */
@@ -390,19 +445,324 @@ void ped_append_mesh(GMesh *m, const Ped *p)
         uv[4] = face_sub(L->face, open, 4, 1, 24, 5);    /* back: hair */
         uv[5] = face_sub(L->face, open, 0, 0, 32, 32);   /* face */
         part(m, &bones[B_HEAD], L, B_HEAD, uv, WHITE, 0.0f);
-        if (L->hat == 1) {
-            all6(uv, uv_tile(T_CLOTH_SHIRT));
-            gm_box_xf(m, &bones[B_HEAD], v3(-0.12f, 0.25f, -0.125f), v3(0.12f, 0.33f, 0.125f), uv, 0xFF5A3A2Au, BOX_ALL);
-            gm_box_xf(m, &bones[B_HEAD], v3(-0.11f, 0.25f, -0.23f), v3(0.11f, 0.27f, -0.12f), uv, 0xFF4A3020u, BOX_ALL);
-        } else if (L->hat == 2) {
-            all6(uv, uv_tile(T_HEADSCARF));
+        if (L->hat == HAT_CAP || L->hat == HAT_POLICE || L->hat == HAT_BEANIE) {
+            all6(uv, uv_sub(T_HAIR, SC_SHIRT));
+            gm_box_xf(m, &bones[B_HEAD], v3(-0.12f, 0.25f, -0.125f), v3(0.12f, 0.33f, 0.125f), uv, L->hat_tint, BOX_ALL);
+            gm_box_xf(m, &bones[B_HEAD], v3(-0.11f, 0.25f, -0.23f), v3(0.11f, 0.27f, -0.12f), uv, gfx_mul(L->hat_tint, 0.8f), BOX_ALL);
+        } else if (L->hat == HAT_SCARF) {
+            all6(uv, uv_sub(T_HAIR, SC_SCARF));
             gm_box_xf(m, &bones[B_HEAD], v3(-0.125f, 0.12f, -0.10f), v3(0.125f, 0.315f, 0.135f), uv, WHITE, BOX_ALL & ~32);
             gm_box_xf(m, &bones[B_HEAD], v3(-0.06f, -0.04f, 0.10f), v3(0.06f, 0.14f, 0.15f), uv, WHITE, BOX_ALL);
-        } else if (L->face != FACE_KABAN) {
-            all6(uv, uv_tile(T_HAIR));
+        } else if (L->hair_style != HAIR_BALD) {
+            all6(uv, uv_sub(T_HAIR, SC_HAIR));
             gm_box_xf(m, &bones[B_HEAD], v3(-0.115f, 0.265f, -0.125f), v3(0.115f, 0.305f, 0.125f), uv, L->hair, BOX_ALL);
         }
     }
+}
+
+
+/* ----------------------------------------------------- detailed model
+ * Bodies of revolution with smooth (per-vertex) lighting: the head is a
+ * rounded shell with the face projected on its front, nose and ears; the
+ * torso narrows at the waist and widens to the shoulders; limbs are tapered
+ * six-sided tubes. Built per frame in world space like the box model. */
+
+typedef struct { float y, rx, rz, cz; } Ring;
+
+#define SEG_ALL 0xFFFF
+
+
+static void vtx(GMesh *m, const Xf *xf, V3 p, V3 n, float u, float v, unsigned int tint)
+{
+    GVertex *g = &m->v[m->n++];
+    V3 w = xf_point(xf, p);
+    g->u = u;
+    g->v = v;
+    g->color = gfx_shade(xf_dir(xf, n), tint);
+    g->x = w.x;
+    g->y = w.y;
+    g->z = w.z;
+}
+
+typedef struct {
+    UVRect side, front, back, cap;
+    float front_w, front_y0, front_y1;  /* planar projection of `front` */
+    int planar;                          /* 1: front segments use the planar projection */
+    unsigned int tint, front_tint;
+} LatheLook;
+
+/* Rings around the bone's y axis, `sides` segments; angle 0 faces the
+ * character's front (-z). seg_mask picks segments (bit j). */
+static void lathe(GMesh *m, const Xf *xf, const Ring *r, int nr, int sides, float sx, float sz, float sy,
+                  const LatheLook *lk, unsigned int seg_mask, int cap_top, int cap_bottom)
+{
+    int i, j;
+    float ylo = r[0].y, yhi = r[nr - 1].y;
+    if (!gm_reserve(m, (nr - 1) * sides * 6 + (cap_top + cap_bottom) * sides * 3)) return;
+    for (j = 0; j < sides; j++) {
+        float a0 = (j - 0.5f) * 2.0f * PI_F / sides, a1 = (j + 0.5f) * 2.0f * PI_F / sides, ac = j * 2.0f * PI_F / sides;
+        float c = cosf(ac);
+        int front = lk->planar && c > 0.5f;
+        const UVRect *uv = front ? &lk->front : (c < -0.5f ? &lk->back : &lk->side);
+        unsigned int tint = front ? lk->front_tint : lk->tint;
+        float s0 = sinf(a0), c0 = cosf(a0), s1 = sinf(a1), c1 = cosf(a1);
+        if (!(seg_mask & (1u << j))) continue;
+        for (i = 0; i + 1 < nr; i++) {
+            const Ring *A = &r[i], *B = &r[i + 1];
+            V3 p[4], n[4];
+            float u[4], v[4];
+            int k;
+            p[0] = v3(s0 * A->rx * sx, A->y * sy, (A->cz - c0 * A->rz) * sz);
+            p[1] = v3(s0 * B->rx * sx, B->y * sy, (B->cz - c0 * B->rz) * sz);
+            p[2] = v3(s1 * B->rx * sx, B->y * sy, (B->cz - c1 * B->rz) * sz);
+            p[3] = v3(s1 * A->rx * sx, A->y * sy, (A->cz - c1 * A->rz) * sz);
+            n[0] = n[1] = v3(s0 / (A->rx + 1e-3f), 0.0f, -c0 / (A->rz + 1e-3f));
+            n[2] = n[3] = v3(s1 / (A->rx + 1e-3f), 0.0f, -c1 / (A->rz + 1e-3f));
+            /* tilt the normals with the taper so shoulders and the crown catch light */
+            {
+                float dr = (B->rx - A->rx) / (B->y - A->y + 1e-4f);
+                for (k = 0; k < 4; k++) n[k].y = -dr * 4.0f;
+            }
+            for (k = 0; k < 4; k++) {
+                float yy = (k == 1 || k == 2) ? B->y : A->y;
+                if (front) {
+                    u[k] = uv->u0 + (uv->u1 - uv->u0) * clampf(p[k].x / (lk->front_w * sx) + 0.5f, 0.0f, 1.0f);
+                    v[k] = uv->v0 + (uv->v1 - uv->v0) * clampf((lk->front_y1 - yy) / (lk->front_y1 - lk->front_y0), 0.0f, 1.0f);
+                } else {
+                    u[k] = (k < 2) ? uv->u0 : uv->u1;
+                    v[k] = uv->v0 + (uv->v1 - uv->v0) * clampf((yhi - yy) / (yhi - ylo + 1e-4f), 0.0f, 1.0f);
+                }
+            }
+            vtx(m, xf, p[0], n[0], u[0], v[0], tint);
+            vtx(m, xf, p[1], n[1], u[1], v[1], tint);
+            vtx(m, xf, p[2], n[2], u[2], v[2], tint);
+            vtx(m, xf, p[0], n[0], u[0], v[0], tint);
+            vtx(m, xf, p[2], n[2], u[2], v[2], tint);
+            vtx(m, xf, p[3], n[3], u[3], v[3], tint);
+        }
+        for (i = 0; i < 2; i++) {
+            const Ring *R = i ? &r[nr - 1] : &r[0];
+            float cy = R->y * sy, cu = (lk->cap.u0 + lk->cap.u1) * 0.5f, cv = (lk->cap.v0 + lk->cap.v1) * 0.5f;
+            V3 nn = v3(0, i ? 1.0f : -1.0f, 0), q0, q1;
+            if (!(i ? cap_top : cap_bottom)) continue;
+            q0 = v3(s0 * R->rx * sx, cy, (R->cz - c0 * R->rz) * sz);
+            q1 = v3(s1 * R->rx * sx, cy, (R->cz - c1 * R->rz) * sz);
+            vtx(m, xf, v3(0, cy, R->cz * sz), nn, cu, cv, lk->tint);
+            vtx(m, xf, i ? q1 : q0, nn, lk->cap.u0, lk->cap.v0, lk->tint);
+            vtx(m, xf, i ? q0 : q1, nn, lk->cap.u1, lk->cap.v1, lk->tint);
+        }
+    }
+}
+
+static void plain_look(LatheLook *lk, UVRect uv, unsigned int tint)
+{
+    lk->side = lk->front = lk->back = lk->cap = uv;
+    lk->planar = 0;
+    lk->tint = lk->front_tint = tint;
+    lk->front_w = 1.0f;
+    lk->front_y0 = 0.0f;
+    lk->front_y1 = 1.0f;
+}
+
+/* tapered tube between two radii */
+static void tube(GMesh *m, const Xf *xf, float y0, float y1, float r0x, float r0z, float r1x, float r1z, float sx,
+                 UVRect uv, unsigned int tint, int cap_bottom)
+{
+    Ring r[2];
+    LatheLook lk;
+    r[0].y = y1; r[0].rx = r1x; r[0].rz = r1z; r[0].cz = 0.0f;   /* lower end first: rings go up */
+    r[1].y = y0; r[1].rx = r0x; r[1].rz = r0z; r[1].cz = 0.0f;
+    plain_look(&lk, uv, tint);
+    lathe(m, xf, r, 2, 6, sx, sx, 1.0f, &lk, SEG_ALL, 0, cap_bottom);
+}
+
+static void head_model(GMesh *m, const Xf *head, const Look *L, int open)
+{
+    /* chin to crown; cz pushes the jaw a little forward */
+    static const Ring HEAD[5] = {
+        { 0.015f, 0.058f, 0.062f, -0.018f },
+        { 0.075f, 0.097f, 0.106f, -0.004f },
+        { 0.155f, 0.113f, 0.122f, 0.0f },
+        { 0.235f, 0.112f, 0.122f, 0.004f },
+        { 0.29f,  0.085f, 0.095f, 0.008f },
+    };
+    static const Ring NECK[2] = { { -0.06f, 0.052f, 0.05f, 0.01f }, { 0.04f, 0.05f, 0.048f, 0.01f } };
+    const float hs = 0.55f + 0.45f * L->height, ws = 1.0f + (L->width - 1.0f) * 0.35f;
+    int tile, fx, fy;
+    LatheLook lk;
+    UVRect skin = uv_sub(T_WHITE, 8, 8, 16, 16), hair = uv_sub(T_HAIR, SC_HAIR);
+    unsigned int ear = gfx_mul(L->skin, 0.92f);
+    UVRect su[6];
+    int i;
+
+    face_cell(L->face, open, &tile, &fx, &fy);
+    plain_look(&lk, skin, L->skin);
+    lathe(m, head, NECK, 2, 6, ws, ws, hs, &lk, SEG_ALL, 0, 0);
+
+    lk.front = uv_sub(tile, fx, fy, 32, 32);
+    lk.side = uv_sub(tile, fx + 28, fy + 14, 3, 6);
+    lk.back = L->hair_style == HAIR_BALD ? uv_sub(tile, fx + 2, fy + 20, 4, 4) : uv_sub(tile, fx + 4, fy + 1, 24, 5);
+    lk.cap = L->hair_style == HAIR_BALD ? uv_sub(tile, fx + 4, fy + 1, 24, 2) : uv_sub(tile, fx + 4, fy + 1, 24, 3);
+    lk.planar = 1;
+    lk.front_w = 0.235f;
+    lk.front_y0 = 0.015f * hs;
+    lk.front_y1 = 0.31f * hs;
+    lk.tint = lk.front_tint = 0xFFFFFFFFu;
+    lathe(m, head, HEAD, 5, 8, ws, ws, hs, &lk, SEG_ALL, 1, 0);
+
+    /* nose and ears */
+    for (i = 0; i < 6; i++) su[i] = skin;
+    gm_box_xf(m, head, v3(-0.017f * ws, 0.105f * hs, -0.142f * ws), v3(0.017f * ws, 0.16f * hs, -0.108f * ws), su,
+              gfx_mul(L->skin, 0.97f), BOX_ALL & ~16);
+    gm_box_xf(m, head, v3(-0.124f * ws, 0.12f * hs, -0.012f * ws), v3(-0.104f * ws, 0.18f * hs, 0.03f * ws), su, ear, BOX_ALL & ~1);
+    gm_box_xf(m, head, v3(0.104f * ws, 0.12f * hs, -0.012f * ws), v3(0.124f * ws, 0.18f * hs, 0.03f * ws), su, ear, BOX_ALL & ~2);
+
+    /* hair volume over the painted hairline */
+    if (L->hair_style != HAIR_BALD && L->hat != HAT_SCARF) {
+        static const Ring CAP[3] = { { 0.215f, 0.12f, 0.13f, 0.006f }, { 0.275f, 0.108f, 0.118f, 0.008f }, { 0.322f, 0.07f, 0.08f, 0.012f } };
+        static const Ring BACK[3] = { { 0.07f, 0.108f, 0.118f, 0.008f }, { 0.155f, 0.12f, 0.13f, 0.004f }, { 0.216f, 0.12f, 0.13f, 0.006f } };
+        static const Ring LONG[3] = { { -0.16f, 0.13f, 0.09f, 0.06f }, { 0.05f, 0.125f, 0.12f, 0.02f }, { 0.216f, 0.12f, 0.13f, 0.006f } };
+        static const Ring BUZZ[2] = { { 0.2f, 0.116f, 0.126f, 0.005f }, { 0.3f, 0.09f, 0.1f, 0.008f } };
+        plain_look(&lk, hair, L->hair);
+        if (L->hair_style == HAIR_BUZZ) {
+            lathe(m, head, BUZZ, 2, 8, ws, ws, hs, &lk, SEG_ALL, 1, 0);
+        } else if (L->hat == HAT_NONE) {
+            lathe(m, head, CAP, 3, 8, ws, ws, hs, &lk, SEG_ALL, 1, 0);
+            /* back and the back corners: bits 3..5 of 8 segments */
+            if (L->hair_style == HAIR_LONG) lathe(m, head, LONG, 3, 8, ws, ws, hs, &lk, 0x7Cu, 0, 0);
+            else lathe(m, head, BACK, 3, 8, ws, ws, hs, &lk, 0x38u, 0, 0);
+        } else {
+            lathe(m, head, BACK, 3, 8, ws, ws, hs, &lk, 0x38u, 0, 0);
+        }
+    }
+
+    /* hats */
+    if (L->hat == HAT_CAP || L->hat == HAT_BEANIE || L->hat == HAT_POLICE) {
+        static const Ring CAPH[3] = { { 0.235f, 0.122f, 0.132f, 0.004f }, { 0.3f, 0.118f, 0.128f, 0.006f }, { 0.34f, 0.07f, 0.08f, 0.01f } };
+        static const Ring BEANIE[3] = { { 0.2f, 0.125f, 0.135f, 0.004f }, { 0.3f, 0.115f, 0.125f, 0.006f }, { 0.37f, 0.05f, 0.06f, 0.01f } };
+        static const Ring POLICE[3] = { { 0.235f, 0.122f, 0.132f, 0.004f }, { 0.31f, 0.13f, 0.14f, 0.004f }, { 0.36f, 0.15f, 0.155f, 0.0f } };
+        UVRect hat = L->hat == HAT_BEANIE ? uv_tile(T_CLOTH_KNIT) : uv_sub(T_HAIR, SC_SHIRT);
+        plain_look(&lk, hat, L->hat_tint);
+        lathe(m, head, L->hat == HAT_BEANIE ? BEANIE : (L->hat == HAT_POLICE ? POLICE : CAPH), 3, 8, ws, ws, hs, &lk,
+              SEG_ALL, 1, L->hat == HAT_POLICE);
+        if (L->hat != HAT_BEANIE) {
+            for (i = 0; i < 6; i++) su[i] = hat;
+            gm_box_xf(m, head, v3(-0.1f * ws, 0.235f * hs, -0.23f * ws), v3(0.1f * ws, 0.252f * hs, -0.11f * ws), su,
+                      gfx_mul(L->hat_tint, 0.7f), BOX_ALL);
+            if (L->hat == HAT_POLICE) {
+                plain_look(&lk, uv_sub(T_WHITE, 8, 8, 16, 16), 0xFF3030B0u); /* red band */
+                {
+                    static const Ring BAND[2] = { { 0.24f, 0.125f, 0.135f, 0.004f }, { 0.275f, 0.127f, 0.137f, 0.004f } };
+                    lathe(m, head, BAND, 2, 8, ws, ws, hs, &lk, SEG_ALL, 0, 0);
+                }
+            }
+        }
+    } else if (L->hat == HAT_SCARF) {
+        /* headscarf: over the crown and the sides, knotted under the chin */
+        static const Ring SC[4] = { { 0.02f, 0.11f, 0.12f, 0.0f }, { 0.12f, 0.126f, 0.136f, 0.0f },
+                                    { 0.25f, 0.126f, 0.136f, 0.004f }, { 0.33f, 0.075f, 0.085f, 0.01f } };
+        UVRect sc = uv_sub(T_HAIR, SC_SCARF);
+        plain_look(&lk, sc, L->hat_tint);
+        lathe(m, head, SC, 4, 8, ws, ws, hs, &lk, 0xFEu, 1, 0);           /* not the face segment */
+        lathe(m, head, SC + 2, 2, 8, ws, ws, hs, &lk, 0x01u, 0, 0);       /* forehead band */
+        for (i = 0; i < 6; i++) su[i] = sc;
+        gm_box_xf(m, head, v3(-0.05f * ws, -0.03f * hs, -0.07f * ws), v3(0.05f * ws, 0.03f * hs, -0.02f * ws), su, L->hat_tint, BOX_ALL);
+    }
+}
+
+static void mesh_detailed(GMesh *m, const Ped *p)
+{
+    const Look *L = &LOOKS[p->who];
+    Pose pose;
+    Xf bones[BONES];
+    LatheLook lk;
+    UVRect top_side = top_side_uv(L), pants = cloth_uv(L->pants_tile), skin = uv_sub(T_WHITE, 8, 8, 16, 16);
+    const float w = L->width, lw = 1.0f + (L->width - 1.0f) * 0.6f, h = L->height;
+    int open = p->anim.mouth > 0.35f && LOOKS[p->who].face < FACE_TALKING, b, k;
+    unsigned int legs = L->skirt ? gfx_mul(L->skin, 0.8f) : L->pants_tint;
+    UVRect leg_uv = L->skirt ? skin : pants;
+
+    anim_pose(&p->anim, &pose);
+    ped_bones(p, &pose, bones);
+
+    /* hips */
+    {
+        static const Ring PELVIS[3] = { { -0.12f, 0.15f, 0.1f, 0.0f }, { 0.0f, 0.172f, 0.112f, 0.0f }, { 0.13f, 0.162f, 0.105f, 0.0f } };
+        plain_look(&lk, pants, L->pants_tint);
+        lathe(m, &bones[B_PELVIS], PELVIS, 3, 8, w, w, h, &lk, SEG_ALL, 0, 1);
+    }
+    /* torso: waist, chest, shoulders, collar; the outfit's front on the chest */
+    {
+        Ring T[5] = { { 0.0f, 0.162f, 0.104f, 0.0f }, { 0.17f, 0.178f, 0.118f, -0.004f }, { 0.33f, 0.2f, 0.125f, -0.006f },
+                      { 0.46f, 0.215f, 0.108f, 0.0f }, { 0.535f, 0.11f, 0.075f, 0.005f } };
+        if (L->skirt || L->hair_style == HAIR_LONG) {
+            T[1].rx = 0.165f;   /* narrower waist, fuller chest */
+            T[2].rz = 0.138f;
+            T[2].cz = -0.014f;
+        }
+        lk.side = lk.back = lk.cap = top_side;
+        lk.front = top_front_uv(L);
+        lk.planar = 1;
+        lk.front_w = 0.36f;
+        lk.front_y0 = 0.0f;
+        lk.front_y1 = 0.54f * h;
+        lk.tint = lk.front_tint = L->top_tint;
+        lathe(m, &bones[B_SPINE], T, 5, 8, w, w, h, &lk, SEG_ALL, 1, 0);
+    }
+    if (L->skirt) {
+        static const Ring SK[2] = { { -0.5f, 0.25f, 0.2f, 0.0f }, { 0.06f, 0.18f, 0.12f, 0.0f } };
+        plain_look(&lk, pants, L->pants_tint);
+        lathe(m, &bones[B_PELVIS], SK, 2, 8, w, w, h, &lk, SEG_ALL, 0, 0);
+    }
+    /* legs */
+    for (b = B_THIGH_L; b <= B_THIGH_R; b += 3) {
+        UVRect shoe[6];
+        tube(m, &bones[b], 0.05f * h, -0.45f * h, 0.085f, 0.09f, 0.062f, 0.066f, w, leg_uv, legs, 0);
+        {
+            /* shin with a calf */
+            static const Ring SH[3] = { { -0.44f, 0.045f, 0.05f, 0.0f }, { -0.2f, 0.058f, 0.068f, 0.008f }, { 0.03f, 0.064f, 0.066f, 0.0f } };
+            Ring r[3];
+            for (k = 0; k < 3; k++) { r[k] = SH[k]; r[k].y *= h; }
+            plain_look(&lk, leg_uv, legs);
+            lathe(m, &bones[b + 1], r, 3, 6, w, w, 1.0f, &lk, SEG_ALL, 0, 0);
+        }
+        for (k = 0; k < 6; k++) shoe[k] = uv_sub(T_HAIR, SC_SHOE);
+        gm_box_xf(m, &bones[b + 2], v3(-0.055f * w, -0.08f * h, -0.17f * w), v3(0.055f * w, 0.0f, 0.06f * w), shoe, L->shoes, BOX_ALL);
+        gm_box_xf(m, &bones[b + 2], v3(-0.05f * w, -0.08f * h, -0.2f * w), v3(0.05f * w, -0.03f * h, -0.17f * w), shoe,
+                  gfx_mul(L->shoes, 0.9f), BOX_ALL & ~16);
+    }
+    /* arms */
+    for (b = B_UARM_L; b <= B_UARM_R; b += 3) {
+        UVRect sleeve = top_side;
+        unsigned int fore = L->top_tint;
+        UVRect fore_uv = sleeve;
+        if (L->skirt && L->top_tile == T_CLOTH_DRESS) {
+            fore = L->skin;
+            fore_uv = skin;
+        }
+        tube(m, &bones[b], 0.05f * h, -0.3f * h, 0.064f, 0.064f, 0.05f, 0.052f, lw, sleeve, L->top_tint, 0);
+        tube(m, &bones[b + 1], 0.03f * h, -0.27f * h, 0.051f, 0.051f, 0.04f, 0.038f, lw, fore_uv, fore, 0);
+        {
+            /* hand: a flattened rounded block, a fist when fighting */
+            static const Ring HAND[3] = { { -0.1f, 0.03f, 0.022f, 0.0f }, { -0.05f, 0.042f, 0.03f, 0.0f }, { 0.01f, 0.036f, 0.032f, 0.0f } };
+            Ring r[3];
+            for (k = 0; k < 3; k++) { r[k] = HAND[k]; r[k].y *= h; }
+            plain_look(&lk, skin, L->skin);
+            lathe(m, &bones[b + 2], r, 3, 6, lw, lw, 1.0f, &lk, SEG_ALL, 0, 1);
+        }
+    }
+    head_model(m, &bones[B_HEAD], L, open);
+}
+
+void ped_append_mesh_lod(GMesh *m, const Ped *p, int detail)
+{
+    if (detail) mesh_detailed(m, p);
+    else mesh_boxes(m, p);
+}
+
+void ped_append_mesh(GMesh *m, const Ped *p)
+{
+    mesh_detailed(m, p);
 }
 
 /* ------------------------------------------------------------- movement */
@@ -416,7 +776,30 @@ void ped_init(Ped *p, int who, V3 pos, float yaw)
     p->yaw = yaw;
     p->on_ground = 1;
     p->walk_speed = 1.4f;
+    p->punch_t = -1.0f;
     p->anim.t = (float)(who * 1.7);
+}
+
+#define PUNCH_OUT 0.11f    /* fist reaches the target */
+#define PUNCH_HOLD 0.05f
+#define PUNCH_BACK 0.2f
+
+int ped_punch(Ped *p)
+{
+    if (p->punch_t >= 0.0f || p->knock_t > 0.0f || p->anim.sit > 0.5f) return 0;
+    p->punch_t = 0.0f;
+    p->anim.punch_arm ^= 1;
+    return 1;
+}
+
+void ped_take_hit(Ped *p, V3 from, float strength)
+{
+    V3 d = v3_sub(p->pos, from);
+    float l = sqrtf(d.x * d.x + d.z * d.z);
+    if (l < 1e-3f) d = yaw_fwd(p->yaw + PI_F), l = 1.0f;
+    p->vel.x += d.x / l * 2.2f * strength;
+    p->vel.z += d.z / l * 2.2f * strength;
+    p->anim.hurt = 1.0f;   /* a punch already on its way still lands */
 }
 
 void ped_face(Ped *p, float yaw, float dt)
@@ -473,6 +856,22 @@ int ped_update(Ped *p, V3 move, int sprint, int jump, float dt)
     int ev = 0;
 
     a->t += dt;
+    /* punching: out fast, a short hold, back to the guard */
+    if (p->punch_t >= 0.0f) {
+        float before = p->punch_t;
+        p->punch_t += dt;
+        if (before < PUNCH_OUT && p->punch_t >= PUNCH_OUT) ev |= PED_EV_PUNCH;
+        if (p->punch_t < PUNCH_OUT) a->punch = smooth01(p->punch_t / PUNCH_OUT);
+        else if (p->punch_t < PUNCH_OUT + PUNCH_HOLD) a->punch = 1.0f;
+        else a->punch = 1.0f - smooth01((p->punch_t - PUNCH_OUT - PUNCH_HOLD) / PUNCH_BACK);
+        if (p->punch_t >= PUNCH_OUT + PUNCH_HOLD + PUNCH_BACK) {
+            p->punch_t = -1.0f;
+            a->punch = 0.0f;
+        }
+        mlen *= 0.3f;   /* plant the feet */
+    }
+    a->fight = approach(a->fight, p->fight_mode && p->knock_t <= 0.0f ? 1.0f : 0.0f, dt * 5.0f);
+    a->hurt = approach(a->hurt, 0.0f, dt * 2.5f);
     if (p->knock_t > 0.0f) {
         p->knock_t -= dt;
         a->knock = approach(a->knock, p->knock_t > 0.7f ? 1.0f : 0.0f, dt * (p->knock_t > 0.7f ? 4.0f : 1.6f));
@@ -517,14 +916,14 @@ int ped_update(Ped *p, V3 move, int sprint, int jump, float dt)
 
     /* facing follows the movement; lean into turns */
     spd = sqrtf(hv.x * hv.x + hv.z * hv.z);
-    if (spd > 0.25f && a->knock < 0.1f) {
+    if (spd > 0.25f && a->knock < 0.1f && !(p->fight_mode && p->face_goal_yaw)) {
         float want = yaw_of(hv.x, hv.z), d = wrap_pi(want - p->yaw);
         float rate = clampf(d * 10.0f, -9.0f, 9.0f);
         p->yaw_vel = approach(p->yaw_vel, rate, dt * 60.0f);
     } else if (p->face_goal_yaw) {
         float d = wrap_pi(p->goal_yaw - p->yaw);
         p->yaw_vel = approach(p->yaw_vel, clampf(d * 6.0f, -5.0f, 5.0f), dt * 40.0f);
-        if (fabsf(d) < 0.02f) p->face_goal_yaw = 0;
+        if (fabsf(d) < 0.02f && !p->fight_mode) p->face_goal_yaw = 0;
     } else {
         p->yaw_vel = approach(p->yaw_vel, 0.0f, dt * 40.0f);
     }

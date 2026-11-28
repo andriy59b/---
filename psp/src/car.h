@@ -69,6 +69,8 @@ void car_step(Car *c, float dt);
 #define CAR_EV_HONK 1
 #define CAR_EV_CRASH 2
 #define CAR_EV_HIT_PED 4
+/* other people on foot that traffic stops for (copied, up to 16) */
+void cars_set_walkers(const V3 *pos, int n);
 int  cars_update(float dt, V3 focus, const V3 *player_pos, int traffic);
 
 /* Character vs cars: pushes the point out; returns impact speed if hit by a moving car. */

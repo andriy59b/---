@@ -12,7 +12,7 @@ enum {
     T_CONCRETE, T_BIRCH, T_POPLAR, T_BUSH, T_SUNFLOWERS, T_FIELD_WHEAT, T_FIELD_SUNFLOWER, T_HILLS,
     T_WINDOW_LIT, T_CAR_SIDE, T_CAR_PARTS, T_TIRE, T_CAR_GLASS, T_FACES_A, T_FACES_B, T_FACES_C,
     T_HAIR, T_CLOTH_TRACK, T_CLOTH_LEATHER, T_CLOTH_BLAZER, T_CLOTH_DRESS, T_CLOTH_OVERALLS, T_CLOTH_DENIM, T_CLOTH_ARMY,
-    T_CLOTH_SHIRT, T_SHOE, T_HEADSCARF, T_BUS_SIDE, T_LAMP, T_BENCH, T_SHADOW, T_FLARE,
+    T_FACES_D, T_FACES_E, T_CLOTH_KNIT, T_BUS_SIDE, T_LAMP, T_BENCH, T_SHADOW, T_FLARE,
     T_COUNT
 };
 
@@ -27,8 +27,23 @@ enum {
 #define CP_BUMPER          0, 48, 64, 6
 #define CP_DARK            32, 40, 8, 8
 
-/* Faces: each T_FACES_* tile holds two characters x (closed, open mouth) in 32x32 cells */
-enum { FACE_ANDRIY = 0, FACE_TARAS, FACE_GALYA, FACE_KABAN, FACE_SELLER, FACE_THUG, FACE_COUNT };
+/* Small cloth patterns, 32x32 quarters of T_HAIR (pixels) */
+#define SC_HAIR   0, 0, 32, 32
+#define SC_SHIRT  32, 0, 32, 32
+#define SC_SHOE   0, 32, 32, 32
+#define SC_SCARF  32, 32, 32, 32
+
+/* Faces: T_FACES_A..C hold two characters x (closed, open mouth) in 32x32
+ * cells; the passers-by (who do not talk) have one closed-mouth cell each,
+ * four to a tile in T_FACES_D and T_FACES_E. */
+enum {
+    FACE_ANDRIY = 0, FACE_TARAS, FACE_GALYA, FACE_KABAN, FACE_SELLER, FACE_THUG,
+    FACE_NADIA, FACE_PETRO, FACE_OLIA, FACE_VOVAN, FACE_STEPAN, FACE_IRYNA, FACE_MYKHAILO, FACE_PETRYK,
+    FACE_COUNT
+};
+#define FACE_TALKING 6   /* faces below this have an open-mouth cell */
+/* pixel origin of a face cell */
+void face_cell(int face, int open, int *tile, int *x, int *y);
 UVRect uv_face(int face, int mouth_open);
 
 void texgen_atlas(unsigned int *atlas);   /* TEX_SIZE x TEX_SIZE, ABGR */

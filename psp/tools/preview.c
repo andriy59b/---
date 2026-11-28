@@ -9,6 +9,7 @@
 #include "../src/car.h"
 #include "../src/actor.h"
 #include "../src/cutscene.h"
+#include "../src/crowd.h"
 #include "../src/city.h"
 
 static unsigned int atlas[TEX_SIZE * TEX_SIZE];
@@ -41,6 +42,7 @@ static Ped peds[16];
 static Cutscene *cur_cs;
 
 static int res_scale = 1;
+static int with_crowd;
 static int npeds;
 
 static void draw_peds(Raster *r)
@@ -74,6 +76,13 @@ static void shot(const char *dir, const char *name, V3 eye, V3 target)
     draw_city(&r, eye, 220.0f);
     draw_cars(&r);
     draw_peds(&r);
+    if (with_crowd) {
+        GMesh m;
+        gm_init(&m);
+        crowd_append_meshes(&m, eye, 70.0f, 16.0f);
+        rs_draw(&r, m.v, m.n);
+        gm_free(&m);
+    }
     snprintf(path, sizeof(path), "%s/%s.png", dir, name);
     rs_write_png(&r, path);
     rs_free(&r);
@@ -119,6 +128,29 @@ int main(int argc, char **argv)
         cars_clear();
     }
     shot(dir, "street", v3(10.5f, 1.7f, 70.0f), v3(10.5f, 3.0f, 20.0f));
+    {
+        /* passers-by on the pavements */
+        Ped me;
+        int t;
+        ped_init(&me, CH_ANDRIY, v3(14.5f, WALK_H, 52.0f), 0.0f);
+        crowd_reset(11u);
+        for (t = 0; t < 60 * 2; t++) crowd_update(1.0f / 60, &me, me.pos, 1);
+        /* bring the first eight onto this street, one of each */
+        for (t = 0; t < CH_PASSERS && t < CROWD_MAX; t++) {
+            Ped *p = &crowd[t].ped;
+            ped_init(p, CH_FIRST_PASSER + t, v3(t & 1 ? 1.5f : 14.5f, WALK_H, 60.0f - t * 2.6f), t & 1 ? PI_F : 0.0f);
+            crowd[t].state = WK_WANDER;
+            crowd[t].axis = 1;
+            p->goal = v3(p->pos.x, WALK_H, p->pos.z + (t & 1 ? 20.0f : -20.0f));
+            p->has_goal = 1;
+        }
+        for (t = 0; t < 60 * 1; t++) crowd_update(1.0f / 60, &me, me.pos, 0);
+        with_crowd = 1;
+        res_scale = 2;
+        shot(dir, "crowd", v3(10.5f, 2.2f, 66.0f), v3(13.0f, 1.0f, 46.0f));
+        res_scale = 1;
+        with_crowd = 0;
+    }
     shot(dir, "home", v3(30.0f, 1.7f, 58.0f), v3(40.0f, 6.0f, 34.0f));
     shot(dir, "garages", v3(64 + 34.0f, 1.7f, 10.0f), v3(64 + 22.0f, 1.5f, 26.0f));
     shot(dir, "market", v3(-128 + 30.0f, 1.8f, 64 + 8.0f), v3(-128 + 40.0f, 1.5f, 64 + 36.0f));
@@ -186,16 +218,42 @@ int main(int argc, char **argv)
         }
         cars_clear();
     }
-    /* characters: cast line-up */
+    /* characters: cast line-up, the passers-by, close-ups of faces */
     cars_clear();
-    npeds = 0;
-    for (i = 0; i < CH_COUNT; i++) {
-        ped_init(&peds[npeds++], i, v3(400.0f + i * 1.1f, 0.0f, 9.0f), 0.0f);
-        peds[npeds - 1].anim.t = 2.0f + i;
+    {
+        int row;
+        for (row = 0; row < 2; row++) {
+            int first = row ? CH_FIRST_PASSER : 0, count = row ? CH_PASSERS : CH_FIRST_PASSER;
+            float span = (count - 1) * 1.1f;
+            npeds = 0;
+            for (i = 0; i < count; i++) {
+                ped_init(&peds[npeds++], first + i, v3(400.0f + i * 1.1f, 0.0f, 9.0f), 0.0f);
+                peds[npeds - 1].anim.t = 2.0f + i;
+            }
+            res_scale = 2;
+            shot(dir, row ? "passers" : "cast", v3(400.0f + span * 0.5f, 1.2f, 9.0f - 1.1f - span * 0.62f),
+                 v3(400.0f + span * 0.5f, 1.0f, 9.0f));
+            for (i = 0; i < count; i++) {
+                char name[32];
+                snprintf(name, sizeof(name), "face%d", first + i);
+                shot(dir, name, v3(400.0f + i * 1.1f + 0.35f, 1.6f * LOOKS[first + i].height, 9.0f - 0.85f),
+                     v3(400.0f + i * 1.1f, 1.5f * LOOKS[first + i].height, 9.0f));
+            }
+            res_scale = 1;
+        }
+        /* fists up and a punch */
+        npeds = 2;
+        ped_init(&peds[0], CH_ANDRIY, v3(400.0f, 0.0f, 9.0f), -PI_F / 2);
+        ped_init(&peds[1], CH_VOVAN, v3(401.0f, 0.0f, 9.0f), PI_F / 2);
+        peds[0].anim.fight = 1.0f;
+        peds[0].anim.punch = 1.0f;
+        peds[0].anim.punch_arm = 1;
+        peds[1].anim.fight = 1.0f;
+        peds[1].anim.hurt = 0.7f;
+        res_scale = 2;
+        shot(dir, "fight", v3(400.5f, 1.3f, 11.6f), v3(400.5f, 1.0f, 9.0f));
+        res_scale = 1;
     }
-    res_scale = 2;
-    shot(dir, "cast", v3(402.75f, 1.2f, 5.3f), v3(402.75f, 1.0f, 9.0f));
-    res_scale = 1;
     /* walk and run cycles seen from the side */
     {
         int row;

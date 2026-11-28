@@ -72,4 +72,17 @@ int  view_cone_contains(const ViewCone *c, V3 lo, V3 hi);
  * Returns the number of vertices written, or -1 if out is too small. */
 int  gm_cone_clip(const GVertex *v, int n, const ViewCone *c, GVertex *out, int cap);
 
+/* Runs of consecutive triangles that lie close together, with a bounding
+ * sphere: against the cone most runs are wholly inside (drawn straight from
+ * the mesh) or wholly outside (skipped), only the few on its edge are cut. */
+typedef struct {
+    V3 c;
+    float r;
+    int first, count;   /* vertices */
+} GChunk;
+
+int  gm_chunks(const GVertex *v, int n, GChunk *out, int cap);  /* returns the chunk count, -1 if cap too small */
+/* 1 sphere wholly inside the cone, -1 wholly outside, 0 on its edge */
+int  view_cone_sphere(const ViewCone *c, V3 centre, float r);
+
 #endif

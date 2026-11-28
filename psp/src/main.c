@@ -15,6 +15,7 @@
 #include "audio.h"
 #include "car.h"
 #include "city.h"
+#include "crowd.h"
 #include "cutscene.h"
 #include "game.h"
 #include "render.h"
@@ -40,6 +41,8 @@ static const char LEVEL_MAGIC[8] = { 'U', 'K', 'R', 'C', 'R', '0', '0', '2' };
 static Level L;
 static Ped peds[N_ACTORS];
 static Ped extras[MAX_EXTRAS];
+#define PED_DETAIL_DIST 24.0f /* closer than this: the detailed model */
+static float punch_guard; /* fists stay up a while after a punch */
 static float extra_t[MAX_EXTRAS];
 static Ped *player = &peds[A_ANDRIY];
 static volatile int running = 1;
@@ -260,6 +263,8 @@ static void begin_session(void)
     if (L.story.mission == M_TAIL)
         car_spawn(CK_CHASER, CAR_GELENDER, v3(player->pos.x + 30, 0, player->pos.z), 0, KABAN_CAR_PAINT);
     ride_reset(&ride);
+    crowd_reset(1996u);
+    punch_guard = 0.0f;
     cam_yaw = L.cam_yaw;
     cam_pitch = -0.12f;
     apply_volumes();
@@ -429,10 +434,11 @@ static void build_dynamic(V3 eye, float yaw, float radius)
         if (p == player && L.first_person && pstate == P_FOOT && mode != MODE_CUTSCENE) continue;
         d = v3_sub(p->pos, eye);
         if (d.x * d.x + d.z * d.z > 90.0f * 90.0f) continue;
-        ped_append_mesh(&dyn, p);
+        ped_append_mesh_lod(&dyn, p, d.x * d.x + d.z * d.z < PED_DETAIL_DIST * PED_DETAIL_DIST);
     }
     for (i = 0; i < MAX_EXTRAS; i++)
-        if (extras[i].active) ped_append_mesh(&dyn, &extras[i]);
+        if (extras[i].active) ped_append_mesh_lod(&dyn, &extras[i], 1);
+    if (mode != MODE_CUTSCENE) crowd_append_meshes(&dyn, eye, 70.0f, 16.0f);
 }
 
 static void draw_world(V3 eye, float yaw, float pitch, const SkyState *sky, float radius, int markers)
@@ -449,6 +455,9 @@ static void draw_world(V3 eye, float yaw, float pitch, const SkyState *sky, floa
     for (i = 0; i < N_ACTORS; i++)
         if (peds[i].active)
             r_shadow(peds[i].pos, 0.42f, 0.42f, 0.0f, 0.7f);
+    if (mode != MODE_CUTSCENE)
+        for (i = 0; i < CROWD_MAX; i++)
+            if (crowd[i].state != WK_FREE) r_shadow(crowd[i].ped.pos, 0.42f, 0.42f, 0.0f, 0.7f);
     build_dynamic(eye, yaw, radius);
     r_mesh(&dyn, sky);
     r_night_overlay(sky);
@@ -649,6 +658,11 @@ int main(void)
                 pev = ped_update(player, move, (buttons & PSP_CTRL_CROSS) != 0, (pressed & PSP_CTRL_SQUARE) != 0, dt);
                 if (L.first_person) player->yaw = cam_yaw;
                 if (pev & (PED_EV_STEP | PED_EV_LAND)) synth_sfx(SFX_STEP);
+                /* fists: circle punches, left and right in turn */
+                if ((pressed & PSP_CTRL_CIRCLE) && ped_punch(player)) punch_guard = 2.5f;
+                if ((pev & PED_EV_PUNCH) && crowd_player_punch(player)) synth_sfx(SFX_BREAK);
+                punch_guard = punch_guard > dt ? punch_guard - dt : 0.0f;
+                player->fight_mode = punch_guard > 0.0f || crowd_fighting();
                 {
                     float hit = car_push_point(&player->pos, 0.32f);
                     if (hit > 5.0f && player->knock_t <= 0.0f) {
@@ -672,6 +686,16 @@ int main(void)
             }
 
             focus = car_idx >= 0 ? cars[car_idx].pos : player->pos;
+            if (pstate != P_FOOT) player->fight_mode = 0;
+            {
+                /* passers-by: traffic stops for them; fists, run-overs */
+                V3 wpos[16];
+                int cev;
+                cars_set_walkers(wpos, crowd_positions(wpos, 16));
+                cev = crowd_update(dt, pstate == P_FOOT ? player : NULL, focus, 1);
+                if (cev & (CROWD_EV_PLAYER_HIT)) synth_sfx(SFX_BREAK);
+                if (cev & (CROWD_EV_PLAYER_DOWN | CROWD_EV_RUN_OVER)) synth_sfx(SFX_CRASH);
+            }
             /* traffic also stops for us while we run after a car */
             ev = cars_update(dt, focus, (pstate == P_FOOT || pstate == RIDE_WALK) ? &player->pos : NULL, 1);
             if (ev & CAR_EV_HONK) synth_sfx(SFX_HORN);
@@ -724,6 +748,8 @@ int main(void)
             CsIO io = cs_io();
             int i;
             cs_update(&cs, &io, dt, (pressed & PSP_CTRL_CROSS) != 0, (pressed & PSP_CTRL_START) != 0);
+            cars_set_walkers(NULL, 0);
+            player->fight_mode = 0;
             handle_requests(cs.requests);
             for (i = 0; i < N_ACTORS; i++)
                 if (peds[i].active) ped_update(&peds[i], v3(0, 0, 0), 0, 0, dt);

@@ -2,6 +2,7 @@
 #include "texgen.h"
 
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* ------------------------------------------------------------------- font */
@@ -964,7 +965,37 @@ static const FaceSpec FACES[FACE_COUNT] = {
     { 0xFF7098D0u, 0xFF303030u, 0xFF203020u, 0xFF202020u, 0xFF485890u, 0, 1, 0, 0, 1, 0, 0 }, /* Kaban  */
     { 0xFF88ACD8u, 0xFF505868u, 0xFF504030u, 0xFF404858u, 0xFF4858A0u, 0, 0, 0, 1, 0, 0, 0 }, /* Seller */
     { 0xFF80A4D4u, 0xFF181818u, 0xFF202020u, 0xFF181818u, 0xFF4858A0u, 0, 1, 0, 0, 0, 0, 0 }, /* Thug   */
+    /* passers-by */
+    { 0xFF98B4D8u, 0xFFB8B8B8u, 0xFF604830u, 0xFF909090u, 0xFF5058A0u, 0, 0, 0, 0, 0, 0, 1 }, /* baba Nadia */
+    { 0xFF809CC8u, 0xFFC8C8C8u, 0xFF505040u, 0xFFA0A0A0u, 0xFF485090u, 1, 1, 0, 0, 1, 0, 0 }, /* did Petro */
+    { 0xFF9CC0ECu, 0xFF60B8E0u, 0xFF905828u, 0xFF305070u, 0xFF4040D0u, 0, 0, 1, 0, 0, 1, 0 }, /* Olia */
+    { 0xFF84A8D8u, 0xFF384048u, 0xFF303020u, 0xFF303030u, 0xFF4858A0u, 0, 1, 0, 0, 0, 0, 0 }, /* Vovan */
+    { 0xFF7898C8u, 0xFF203040u, 0xFF404830u, 0xFF203040u, 0xFF485898u, 1, 0, 0, 0, 0, 0, 0 }, /* Stepanovych */
+    { 0xFF94B4E0u, 0xFF102038u, 0xFF305030u, 0xFF102038u, 0xFF3020B0u, 0, 0, 1, 1, 0, 1, 0 }, /* Iryna */
+    { 0xFF6C90C0u, 0xFF283038u, 0xFF403828u, 0xFF283038u, 0xFF485090u, 0, 1, 0, 0, 0, 0, 0 }, /* Mykhailo */
+    { 0xFFA0C4ECu, 0xFF4090C8u, 0xFF905830u, 0xFF4080B0u, 0xFF5068B8u, 0, 0, 0, 0, 0, 0, 0 }, /* Petryk */
 };
+
+/* four closed-mouth faces from `first` */
+static void t_faces_quad(int first)
+{
+    int i;
+    for (i = 0; i < 4; i++) face((i & 1) * 32, (i >> 1) * 32, &FACES[first + i], 0);
+}
+
+void face_cell(int f, int open, int *tile, int *x, int *y)
+{
+    if (f < FACE_TALKING) {
+        *tile = T_FACES_A + f / 2;
+        *x = open ? 32 : 0;
+        *y = (f % 2) * 32;
+    } else {
+        int k = f - FACE_TALKING;
+        *tile = T_FACES_D + k / 4;
+        *x = (k & 1) * 32;
+        *y = ((k >> 1) & 1) * 32;
+    }
+}
 
 static void t_faces(int first)
 {
@@ -977,11 +1008,38 @@ static void t_faces(int first)
 
 UVRect uv_face(int f, int open)
 {
-    int tile = T_FACES_A + f / 2;
-    return uv_sub(tile, open ? 32 : 0, (f % 2) * 32, 32, 32);
+    int tile, x, y;
+    face_cell(f, open, &tile, &x, &y);
+    return uv_sub(tile, x, y, 32, 32);
 }
 
-static void t_hair(void) { grain(0, 0, 63, 63, C(200, 200, 200), 0.5f, 102, 16); }
+/* hair, shirt, shoe and headscarf patterns in the four quarters */
+static void t_hair(void)
+{
+    int x, y;
+    grain(0, 0, 31, 31, C(200, 200, 200), 0.5f, 102, 8);
+    grain(32, 0, 63, 31, C(226, 226, 230), 0.1f, 112, 4);
+    grain(0, 32, 31, 63, C(230, 230, 230), 0.08f, 113, 2);
+    rect(0, 56, 31, 63, C(60, 60, 60));
+    rect(5, 42, 27, 43, C(40, 70, 160));
+    for (y = 32; y < 64; y++)
+        for (x = 32; x < 64; x++) px(x, y, ((x / 3 + y / 3) & 1) ? C(200, 40, 40) : C(150, 20, 30));
+    for (y = 34; y < 64; y += 6)
+        for (x = 34; x < 64; x += 6) px(x, y, C(240, 210, 60));
+}
+
+/* knitted sweater: cable rows and a zig-zag band */
+static void t_cloth_knit(void)
+{
+    int x, y;
+    grain(0, 0, 63, 63, C(230, 230, 230), 0.12f, 120, 8);
+    for (y = 0; y < 64; y++)
+        for (x = 0; x < 64; x++) {
+            if ((x % 8 == 0 || x % 8 == 7) && (y & 1)) px(x, y, C(190, 190, 190));
+            if (y >= 20 && y < 30 && abs((x % 10) - 5) == abs(y - 25)) px(x, y, C(120, 120, 120));
+        }
+    rect(0, 58, 63, 63, C(200, 200, 200));
+}
 
 static void t_cloth_track(void)
 {
@@ -1080,23 +1138,7 @@ static void t_cloth_army(void)
     frame(42, 30, 54, 40, C(60, 66, 40));
 }
 
-static void t_cloth_shirt(void) { grain(0, 0, 63, 63, C(226, 226, 230), 0.1f, 112, 8); }
 
-static void t_shoe(void)
-{
-    grain(0, 0, 63, 63, C(230, 230, 230), 0.08f, 113, 4);
-    rect(0, 48, 63, 63, C(60, 60, 60));
-    rect(10, 20, 54, 22, C(40, 70, 160));
-}
-
-static void t_headscarf(void)
-{
-    int x, y;
-    for (y = 0; y < 64; y++)
-        for (x = 0; x < 64; x++) px(x, y, ((x / 6 + y / 6) & 1) ? C(200, 40, 40) : C(150, 20, 30));
-    for (y = 4; y < 64; y += 12)
-        for (x = 4; x < 64; x += 12) disc((float)x, (float)y, 3, C(240, 210, 60));
-}
 
 /* ----------------------------------------------------------- assemble */
 
@@ -1164,9 +1206,9 @@ void texgen_atlas(unsigned int *atlas)
         case T_CLOTH_OVERALLS: t_cloth_overalls(); break;
         case T_CLOTH_DENIM: t_cloth_denim(); break;
         case T_CLOTH_ARMY: t_cloth_army(); break;
-        case T_CLOTH_SHIRT: t_cloth_shirt(); break;
-        case T_SHOE: t_shoe(); break;
-        case T_HEADSCARF: t_headscarf(); break;
+        case T_FACES_D: t_faces_quad(FACE_NADIA); break;
+        case T_FACES_E: t_faces_quad(FACE_STEPAN); break;
+        case T_CLOTH_KNIT: t_cloth_knit(); break;
         case T_BUS_SIDE: t_bus_side(); break;
         case T_LAMP: t_lamp(); break;
         case T_BENCH: t_bench(); break;

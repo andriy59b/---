@@ -760,6 +760,9 @@ void city_free(void)
         for (b = 0; b < CELLS; b++) {
             gm_free(&cells[a][b].solid);
             gm_free(&cells[a][b].glow);
+            free(cells[a][b].chunks);
+            cells[a][b].chunks = NULL;
+            cells[a][b].nchunks = 0;
         }
     for (a = 0; a < GRID_N * GRID_N; a++) {
         free(grid_items[a]);
@@ -780,7 +783,14 @@ void city_build(unsigned int seed)
     g_seed = seed;
     memset(cells, 0, sizeof(cells));
     for (j = CELL_MIN; j < CELL_MIN + CELLS; j++)
-        for (i = CELL_MIN; i < CELL_MIN + CELLS; i++) build_cell(i, j);
+        for (i = CELL_MIN; i < CELL_MIN + CELLS; i++) {
+            CityCell *c;
+            build_cell(i, j);
+            c = city_cell(i, j);
+            c->chunks = (GChunk *)malloc(sizeof(GChunk) * (size_t)(c->solid.n / 3 + 1));
+            c->nchunks = c->chunks ? gm_chunks(c->solid.v, c->solid.n, c->chunks, c->solid.n / 3 + 1) : 0;
+            if (c->nchunks < 0) c->nchunks = 0;
+        }
     /* world border */
     add_box(-WORLD_HALF - 2, 0, -WORLD_HALF - 2, WORLD_HALF + 2, 20, -WORLD_HALF);
     add_box(-WORLD_HALF - 2, 0, WORLD_HALF, WORLD_HALF + 2, 20, WORLD_HALF + 2);
