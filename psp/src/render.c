@@ -25,6 +25,7 @@ typedef struct { unsigned int color; float x, y, z; } CVertex;
 
 #define VT_F3D (GU_TEXTURE_32BITF | GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_3D)
 #define VT_C3D (GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_3D)
+#define VT_L3D (GU_TEXTURE_32BITF | GU_COLOR_8888 | GU_NORMAL_32BITF | GU_VERTEX_32BITF | GU_TRANSFORM_3D)
 #define VT_F2D (GU_TEXTURE_32BITF | GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_2D)
 #define VT_C2D (GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_2D)
 
@@ -41,6 +42,7 @@ static int clip_used;
 static ViewCone cam_cone;
 
 static unsigned int *atlas_mip[MIP_LEVELS];
+static unsigned int *ground_mip[MIP_LEVELS];  /* GROUND_W x GROUND_H and smaller */
 static unsigned int *font_tex;
 static int bound_tex;
 
@@ -85,8 +87,27 @@ static void bind_atlas(void)
          * plain choice, which is mush on the ground at grazing angles. */
         sceGuTexLevelMode(GU_TEXTURE_AUTO, TEX_LOD_BIAS);
         sceGuTexFilter(GU_NEAREST_MIPMAP_LINEAR, GU_NEAREST);
+        sceGuTexWrap(GU_CLAMP, GU_CLAMP);
         sceGuTexFlush();
         bound_tex = 1;
+    }
+    sceGuTexScale(1.0f, 1.0f);
+    sceGuTexOffset(0.0f, 0.0f);
+}
+
+/* ground strips: repeat along u (the length of a street), clamp across */
+static void bind_ground(void)
+{
+    if (bound_tex != 3) {
+        int l;
+        sceGuTexMode(GU_PSM_8888, MIP_LEVELS - 1, 0, 1);
+        for (l = 0; l < MIP_LEVELS; l++)
+            sceGuTexImage(l, GROUND_W >> l, GROUND_H >> l, GROUND_W >> l, ground_mip[l]);
+        sceGuTexLevelMode(GU_TEXTURE_AUTO, TEX_LOD_BIAS);
+        sceGuTexFilter(GU_NEAREST_MIPMAP_LINEAR, GU_NEAREST);
+        sceGuTexWrap(GU_REPEAT, GU_CLAMP);
+        sceGuTexFlush();
+        bound_tex = 3;
     }
     sceGuTexScale(1.0f, 1.0f);
     sceGuTexOffset(0.0f, 0.0f);
@@ -98,6 +119,7 @@ static void bind_font(void)
         sceGuTexMode(GU_PSM_8888, 0, 0, 0);
         sceGuTexImage(0, FONT_TEX_W, FONT_TEX_H, FONT_TEX_W, font_tex);
         sceGuTexFilter(GU_NEAREST, GU_NEAREST);
+        sceGuTexWrap(GU_CLAMP, GU_CLAMP);
         sceGuTexFlush();
         bound_tex = 2;
     }
@@ -150,8 +172,6 @@ static void draw_chunked(const GVertex *v, const GChunk *ch, int nch)
     if (run_first >= 0) draw_verts(v + run_first, run_end - run_first);
 }
 
-#define DYN_CHUNKS 4096
-static GChunk dyn_chunks[DYN_CHUNKS];
 
 /* ------------------------------------------------------------------- init */
 
@@ -174,6 +194,26 @@ void r_init(void)
             swizzle((unsigned char *)atlas_mip[l], (const unsigned char *)linear, (unsigned int)size * 4, (unsigned int)size);
         }
         free(half);
+    }
+    {
+        /* the ground texture, from the full-size atlas tiles (regenerated:
+         * linear now holds the smallest atlas level) */
+        unsigned int *g = (unsigned int *)memalign(16, GROUND_W * GROUND_H * 4), *h = (unsigned int *)memalign(16, GROUND_W * GROUND_H);
+        unsigned int *full = (unsigned int *)memalign(16, TEX_SIZE * TEX_SIZE * 4);
+        int l, w = GROUND_W, hh = GROUND_H;
+        texgen_atlas(full);
+        texgen_ground(full, g);
+        free(full);
+        for (l = 0; l < MIP_LEVELS; l++, w >>= 1, hh >>= 1) {
+            if (l > 0) {
+                texgen_mip_rect(g, w * 2, hh * 2, h);
+                memcpy(g, h, (size_t)w * hh * 4);
+            }
+            ground_mip[l] = (unsigned int *)memalign(16, (size_t)w * hh * 4);
+            swizzle((unsigned char *)ground_mip[l], (const unsigned char *)g, (unsigned int)w * 4, (unsigned int)hh);
+        }
+        free(g);
+        free(h);
     }
     free(linear);
 
@@ -338,22 +378,26 @@ void r_sky(const SkyState *s, float yaw, float pitch, float fov)
 
 /* ------------------------------------------------------------------- city */
 
-static int cell_visible(const CityCell *c, V3 eye, float fx, float fz, float pitch, float radius)
+
+static void draw_cell_mesh(const CityCell *c, const GMesh *m, const GChunk *ch, int nch, int inside)
 {
-    float vx = c->cx - eye.x, vz = c->cz - eye.z, d = sqrtf(vx * vx + vz * vz), half, r;
-    if (d > radius + 46.0f) return 0;
-    if (d < 70.0f || fabsf(pitch) > 1.0f) return 1;
-    r = 46.0f / d;
-    half = 0.95f + fabsf(pitch) * 0.5f + asinf(r > 1.0f ? 1.0f : r);
-    if (half >= 3.1f) return 1;
-    return (vx * fx + vz * fz) / d >= cosf(half);
+    if (!m->n) return;
+    if (inside) draw_verts(m->v, m->n);
+    else if (nch) draw_chunked(m->v, ch, nch); /* near the camera */
+    else draw_cut(m->v, m->n);
+    (void)c;
 }
 
 void r_city(V3 eye, float yaw, float pitch, float radius, const SkyState *s)
 {
-    float fx = -sinf(yaw), fz = -cosf(yaw);
-    int i, j;
-    bind_atlas();
+    static CellDraw vis[CELLS * CELLS];
+    static unsigned char inside[CELLS * CELLS];
+    int i, n = city_visible_cells(eye, yaw, pitch, radius, vis);
+    for (i = 0; i < n; i++) {
+        const CityCell *c = vis[i].cell;
+        inside[i] = (unsigned char)view_cone_contains(&cam_cone, v3(c->cx - LOT * 0.5f, -1.0f, c->cz - LOT * 0.5f),
+                                                      v3(c->cx + LOT * 0.5f, 60.0f, c->cz + LOT * 0.5f));
+    }
     sceGuEnable(GU_TEXTURE_2D);
     sceGuEnable(GU_DEPTH_TEST);
     sceGuEnable(GU_ALPHA_TEST);
@@ -362,18 +406,18 @@ void r_city(V3 eye, float yaw, float pitch, float radius, const SkyState *s)
     sceGuFog(s->fog_start, s->fog_end, s->fog);
     sceGumMatrixMode(GU_MODEL);
     sceGumLoadIdentity();
-    for (j = CELL_MIN; j < CELL_MIN + CELLS; j++)
-        for (i = CELL_MIN; i < CELL_MIN + CELLS; i++) {
-            CityCell *c = city_cell(i, j);
-            if (!c->solid.n || !cell_visible(c, eye, fx, fz, pitch, radius)) continue;
-            if (view_cone_contains(&cam_cone, v3(c->cx - LOT * 0.5f, -1.0f, c->cz - LOT * 0.5f),
-                                   v3(c->cx + LOT * 0.5f, 60.0f, c->cz + LOT * 0.5f)))
-                draw_verts(c->solid.v, c->solid.n);
-            else if (c->nchunks)
-                draw_chunked(c->solid.v, c->chunks, c->nchunks); /* near the camera */
-            else
-                draw_cut(c->solid.v, c->solid.n);
-        }
+    /* ground strips with the repeating ground texture, then the rest */
+    bind_ground();
+    for (i = 0; i < n; i++) {
+        const CityCell *c = vis[i].cell;
+        draw_cell_mesh(c, &c->ground, c->gchunks, c->ngchunks, inside[i]);
+    }
+    bind_atlas();
+    for (i = 0; i < n; i++) {
+        const CityCell *c = vis[i].cell;
+        if (vis[i].far && inside[i]) draw_verts(c->solid.v, c->core_n);   /* far: without the small things */
+        else draw_cell_mesh(c, &c->solid, c->chunks, c->nchunks, inside[i]);
+    }
     sceGuDisable(GU_FOG);
 }
 
@@ -403,10 +447,46 @@ void r_glow(V3 eye, float radius, float night)
     sceGuDisable(GU_BLEND);
 }
 
-void r_mesh(const GMesh *m, const SkyState *s)
+static void load_xf(const Xf *xf)
 {
-    if (!m->n) return;
-    sceKernelDcacheWritebackRange(m->v, (unsigned int)(m->n * sizeof(GVertex)));
+    ScePspFMatrix4 m;
+    m.x.x = xf->ax.x; m.x.y = xf->ax.y; m.x.z = xf->ax.z; m.x.w = 0.0f;
+    m.y.x = xf->ay.x; m.y.y = xf->ay.y; m.y.z = xf->ay.z; m.y.w = 0.0f;
+    m.z.x = xf->az.x; m.z.y = xf->az.y; m.z.z = xf->az.z; m.z.w = 0.0f;
+    m.w.x = xf->t.x;  m.w.y = xf->t.y;  m.w.z = xf->t.z;  m.w.w = 1.0f;
+    sceGumLoadMatrix(&m);
+}
+
+/* Lighting for meshes with normals, matching gfx_shade: 0.62 ambient plus
+ * 0.40 from the sun, multiplied by the vertex (material) colour. */
+static void lights_on(void)
+{
+    ScePspFVector3 sun = { 0.42f, 0.78f, 0.46f };
+    sceGuEnable(GU_LIGHTING);
+    sceGuEnable(GU_LIGHT0);
+    sceGuLight(0, GU_DIRECTIONAL, GU_DIFFUSE, &sun);
+    sceGuLightColor(0, GU_AMBIENT, 0xFF000000u);
+    sceGuLightColor(0, GU_DIFFUSE, 0xFF666666u);
+    sceGuLightColor(0, GU_SPECULAR, 0xFF000000u);
+    sceGuAmbient(0xFF9E9E9Eu);
+    /* no emission; ambient and diffuse come from the vertex colour */
+    sceGuModelColor(0xFF000000u, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFF000000u);
+    sceGuColorMaterial(GU_AMBIENT | GU_DIFFUSE);
+}
+
+static void lights_off(void)
+{
+    sceGuDisable(GU_LIGHT0);
+    sceGuDisable(GU_LIGHTING);
+}
+
+void r_draw_list(const DrawList *d, const SkyState *s)
+{
+    int i, lit = 0;
+    if (!d->n) return;
+    /* meshes built since the last frame (new cars, the first time a look is
+     * drawn) may still sit in the 16 KB data cache */
+    sceKernelDcacheWritebackAll();
     bind_atlas();
     sceGuEnable(GU_TEXTURE_2D);
     sceGuEnable(GU_DEPTH_TEST);
@@ -415,12 +495,18 @@ void r_mesh(const GMesh *m, const SkyState *s)
     sceGuEnable(GU_FOG);
     sceGuFog(s->fog_start, s->fog_end, s->fog);
     sceGumMatrixMode(GU_MODEL);
-    sceGumLoadIdentity();
-    {
-        int nc = gm_chunks(m->v, m->n, dyn_chunks, DYN_CHUNKS);
-        if (nc > 0) draw_chunked(m->v, dyn_chunks, nc);
-        else draw_cut(m->v, m->n);
+    for (i = 0; i < d->n; i++) {
+        const DrawItem *it = &d->items[i];
+        if (it->lit != lit) {
+            if (it->lit) lights_on();
+            else lights_off();
+            lit = it->lit;
+        }
+        load_xf(&it->xf);
+        sceGumDrawArray(GU_TRIANGLES, it->lit ? VT_L3D : VT_F3D, it->n, 0, it->v);
     }
+    if (lit) lights_off();
+    sceGumLoadIdentity();
     sceGuDisable(GU_FOG);
 }
 

@@ -38,6 +38,7 @@ int  crowd_player_punch(const Ped *player);
 int  crowd_fighting(void);           /* someone is fighting the player */
 int  crowd_positions(V3 *out, int cap); /* standing walkers, for traffic to stop for */
 /* meshes of those within radius of the eye; detailed ones nearer than `near` */
+void crowd_draw(DrawList *dl, V3 eye, V3 fwd, float radius, float near); /* fwd: view direction (xz) */
 void crowd_append_meshes(GMesh *m, V3 eye, float radius, float near);
 
 #endif

@@ -24,7 +24,7 @@ void r_camera(V3 eye, float yaw, float pitch, float fov);
 void r_sky(const SkyState *s, float yaw, float pitch, float fov);
 void r_city(V3 eye, float yaw, float pitch, float radius, const SkyState *s);
 void r_glow(V3 eye, float radius, float night);
-void r_mesh(const GMesh *m, const SkyState *s);       /* world-space dynamic mesh */
+void r_draw_list(const DrawList *d, const SkyState *s); /* moving things, transformed (and lit) by the GE */
 void r_shadow(V3 pos, float half_w, float half_l, float yaw, float alpha);
 void r_flare(V3 pos, float size, unsigned int color);
 void r_clouds(V3 eye, const SkyState *s);

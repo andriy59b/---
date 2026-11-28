@@ -82,6 +82,8 @@ V3   car_local(const Car *c, V3 local);        /* car space -> world */
 /* Rendering: meshes in car space (built once). paint mesh vertex colours are
  * multiplied by the car paint. */
 void carmodels_build(void);
+#define CAR_NEAR 30.0f   /* closer: rounder wheels */
+void car_draw(DrawList *dl, const Car *c, int near); /* lists the car's meshes with their matrices */
 void car_append_mesh(GMesh *out, const Car *c);   /* body, details, door, wheels in world space */
 V3   car_light_pos(const Car *c, int i);          /* 0,1 head lights; 2,3 tail lights */
 

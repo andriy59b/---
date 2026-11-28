@@ -1225,14 +1225,19 @@ void texgen_atlas(unsigned int *atlas)
  * TEX_TILE is a multiple of 2^levels. */
 void texgen_mip(const unsigned int *src, int src_size, unsigned int *dst)
 {
-    int size = src_size / 2, x, y, k;
-    for (y = 0; y < size; y++)
-        for (x = 0; x < size; x++) {
+    texgen_mip_rect(src, src_size, src_size, dst);
+}
+
+void texgen_mip_rect(const unsigned int *src, int src_w, int src_h, unsigned int *dst)
+{
+    int w = src_w / 2, h = src_h / 2, x, y, k;
+    for (y = 0; y < h; y++)
+        for (x = 0; x < w; x++) {
             unsigned int px[4], wsum = 0, c[3] = { 0, 0, 0 }, a = 0;
-            px[0] = src[(2 * y) * src_size + 2 * x];
-            px[1] = src[(2 * y) * src_size + 2 * x + 1];
-            px[2] = src[(2 * y + 1) * src_size + 2 * x];
-            px[3] = src[(2 * y + 1) * src_size + 2 * x + 1];
+            px[0] = src[(2 * y) * src_w + 2 * x];
+            px[1] = src[(2 * y) * src_w + 2 * x + 1];
+            px[2] = src[(2 * y + 1) * src_w + 2 * x];
+            px[3] = src[(2 * y + 1) * src_w + 2 * x + 1];
             for (k = 0; k < 4; k++) {
                 unsigned int al = px[k] >> 24;
                 a += al;
@@ -1246,6 +1251,42 @@ void texgen_mip(const unsigned int *src, int src_size, unsigned int *dst)
             }
             /* keep cut-outs solid while at least half the texels are opaque */
             a = (a + 2) / 4;
-            dst[y * size + x] = (a << 24) | (c[2] << 16) | (c[1] << 8) | c[0];
+            dst[y * w + x] = (a << 24) | (c[2] << 16) | (c[1] << 8) | c[0];
         }
+}
+
+/* ----------------------------------------------------------- ground */
+
+static const int GROUND_TILES[GROUND_ROW_KERB] = { T_ASPHALT, T_ROAD_LINE, T_CROSSWALK, T_SIDEWALK, T_GRASS, T_YARD, T_DIRT };
+
+int ground_row(int tile)
+{
+    int i;
+    for (i = 0; i < GROUND_ROW_KERB; i++)
+        if (GROUND_TILES[i] == tile) return i;
+    return -1;
+}
+
+void ground_row_v(int row, float *v0, float *v1)
+{
+    const float inset = 0.35f;
+    float y0 = (float)(row * 64), y1 = row == GROUND_ROW_KERB ? y0 + 16.0f : y0 + 64.0f;
+    *v0 = (y0 + inset) / GROUND_H;
+    *v1 = (y1 - inset) / GROUND_H;
+}
+
+void texgen_ground(const unsigned int *atlas, unsigned int *out)
+{
+    int r, x, y;
+    for (r = 0; r < GROUND_ROW_KERB; r++) {
+        int tx = (GROUND_TILES[r] % TEX_TILES) * TEX_TILE, ty = (GROUND_TILES[r] / TEX_TILES) * TEX_TILE;
+        for (y = 0; y < 64; y++)
+            for (x = 0; x < 64; x++) out[(r * 64 + y) * GROUND_W + x] = atlas[(ty + y) * TEX_SIZE + tx + x];
+    }
+    {
+        /* kerb: the top 16 px of T_CURB; the rest of its row repeats it */
+        int tx = (T_CURB % TEX_TILES) * TEX_TILE, ty = (T_CURB / TEX_TILES) * TEX_TILE;
+        for (y = 0; y < 64; y++)
+            for (x = 0; x < 64; x++) out[(GROUND_ROW_KERB * 64 + y) * GROUND_W + x] = atlas[(ty + (y & 15)) * TEX_SIZE + tx + x];
+    }
 }

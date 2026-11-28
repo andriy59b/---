@@ -121,7 +121,16 @@ void ped_take_hit(Ped *p, V3 from, float strength); /* flinch and stagger away f
 
 void anim_pose(const AnimState *a, Pose *out);
 void ped_bones(const Ped *p, const Pose *pose, Xf out[BONES]);
+/* Levels of detail: the full model up close, a lighter one (no joint
+ * balls, cuffs, fewer sides) at a medium distance, boxes far away. */
+enum { PED_LOD_BOXES = 0, PED_LOD_MEDIUM, PED_LOD_FULL };
+#define PED_LOD_NEAR 10.0f
+#define PED_LOD_MID 30.0f
+int  ped_lod(float dist);
+/* lists the 15 bone meshes with their matrices (built once per look) */
+void ped_draw(DrawList *dl, const Ped *p, int lod);
+int  ped_model_verts(int who, int lod);
 void ped_append_mesh(GMesh *m, const Ped *p);                /* detailed model */
-void ped_append_mesh_lod(GMesh *m, const Ped *p, int detail); /* 0: cheap boxes for far away */
+void ped_append_mesh_lod(GMesh *m, const Ped *p, int lod);
 
 #endif

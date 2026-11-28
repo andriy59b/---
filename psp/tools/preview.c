@@ -14,10 +14,31 @@
 
 static unsigned int atlas[TEX_SIZE * TEX_SIZE];
 static unsigned int *atlas_mip[4];
+static unsigned int *ground_mip[4];
+
+static void use_texture(Raster *r, unsigned int **mips, int w, int h, int wrap)
+{
+    int l;
+    for (l = 0; l < 4; l++) r->mip[l] = mips[l];
+    r->tex = mips[0];
+    r->tw = w;
+    r->th = h;
+    r->wrap_u = wrap;
+}
 
 static void draw_city(Raster *r, V3 eye, float radius)
 {
     int i, j;
+    /* ground strips first, with the repeating ground texture */
+    use_texture(r, ground_mip, GROUND_W, GROUND_H, 1);
+    for (j = CELL_MIN; j < CELL_MIN + CELLS; j++)
+        for (i = CELL_MIN; i < CELL_MIN + CELLS; i++) {
+            CityCell *c = city_cell(i, j);
+            float dx = c->cx - eye.x, dz = c->cz - eye.z;
+            if (dx * dx + dz * dz > radius * radius) continue;
+            rs_draw(r, c->ground.v, c->ground.n);
+        }
+    use_texture(r, atlas_mip, TEX_SIZE, TEX_SIZE, 0);
     for (j = CELL_MIN; j < CELL_MIN + CELLS; j++)
         for (i = CELL_MIN; i < CELL_MIN + CELLS; i++) {
             CityCell *c = city_cell(i, j);
@@ -98,6 +119,12 @@ int main(int argc, char **argv)
     for (i = 1; i < 4; i++) {
         atlas_mip[i] = (unsigned int *)malloc((size_t)(TEX_SIZE >> i) * (TEX_SIZE >> i) * 4);
         texgen_mip(atlas_mip[i - 1], TEX_SIZE >> (i - 1), atlas_mip[i]);
+    }
+    ground_mip[0] = (unsigned int *)malloc(GROUND_W * GROUND_H * 4);
+    texgen_ground(atlas, ground_mip[0]);
+    for (i = 1; i < 4; i++) {
+        ground_mip[i] = (unsigned int *)malloc((size_t)(GROUND_W >> i) * (GROUND_H >> i) * 4);
+        texgen_mip_rect(ground_mip[i - 1], GROUND_W >> (i - 1), GROUND_H >> (i - 1), ground_mip[i]);
     }
     city_build(1996);
     for (j = CELL_MIN; j < CELL_MIN + CELLS; j++)

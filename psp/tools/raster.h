@@ -21,6 +21,8 @@ typedef struct {
     int filter;          /* RS_FILTER_* used when minified */
     float lod_bias;
     float near_z;        /* near clip distance (default 0.1) */
+    int tw, th;          /* level 0 size of the bound texture (default the atlas) */
+    int wrap_u;          /* 1: repeat along u (the ground texture) */
     int guard_cull;      /* 1: drop triangles like the PSP GE does when a vertex in
                             front of the camera lands outside the 4096x4096
                             drawing area (PPSSPP emulates this too) */

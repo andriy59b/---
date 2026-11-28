@@ -47,7 +47,18 @@ void face_cell(int face, int open, int *tile, int *x, int *y);
 UVRect uv_face(int face, int mouth_open);
 
 void texgen_atlas(unsigned int *atlas);   /* TEX_SIZE x TEX_SIZE, ABGR */
+
+/* Ground texture: the ground tiles stacked in rows of one 64 px wide
+ * texture that repeats along u, so a whole street of asphalt is one long
+ * quad instead of a dozen 4 m ones. Last row: the kerb. */
+#define GROUND_W 64
+#define GROUND_H 512
+#define GROUND_ROW_KERB 7
+int  ground_row(int tile);                 /* row of an atlas ground tile, -1 if not in the ground texture */
+void ground_row_v(int row, float *v0, float *v1);
+void texgen_ground(const unsigned int *atlas, unsigned int *out); /* GROUND_W x GROUND_H */
 void texgen_mip(const unsigned int *src, int src_size, unsigned int *dst); /* half-size level */
+void texgen_mip_rect(const unsigned int *src, int src_w, int src_h, unsigned int *dst);
 
 #define FONT_TEX_W 128
 #define FONT_TEX_H 64

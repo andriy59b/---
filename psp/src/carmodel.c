@@ -24,7 +24,7 @@ static const unsigned char REAR_DOORS[CAR_TYPES] = { 1, 1, 1, 1, 1, 0 };
  * panels, texture coordinates and window glass, so a closed door is exactly
  * the body and an open one leaves an opening into a simple cabin. */
 typedef struct {
-    GMesh paint, detail, wheel;
+    GMesh paint, detail, wheel, wheel_far;
     GMesh door_skin[2];  /* painted outer panel, in body space (0 left, 1 right) */
     GMesh door_glass[2]; /* window, moves with the door */
     GMesh door_trim[2];  /* inner panel and edge, drawn only while open */
@@ -179,12 +179,12 @@ static void quad_x(GMesh *m, float x0, float x1, float y0, float y1, float z, UV
     else gm_quad(m, v3(x1, y0, z), v3(x1, y1, z), v3(x0, y1, z), v3(x0, y0, z), uv, WHITE);
 }
 
-static void build_wheel(GMesh *m, float r, float w)
+static void build_wheel(GMesh *m, float r, float w, int seg)
 {
     int i;
     UVRect cap = uv_tile(T_TIRE), tread = uv_sub(T_CAR_PARTS, CP_DARK);
-    for (i = 0; i < 10; i++) {
-        float a0 = i * 6.2831853f / 10, a1 = (i + 1) * 6.2831853f / 10;
+    for (i = 0; i < seg; i++) {
+        float a0 = i * 6.2831853f / seg, a1 = (i + 1) * 6.2831853f / seg;
         float y0 = cosf(a0) * r, z0 = sinf(a0) * r, y1 = cosf(a1) * r, z1 = sinf(a1) * r;
         float cu = (cap.u0 + cap.u1) * 0.5f, cv = (cap.v0 + cap.v1) * 0.5f;
         float ru = (cap.u1 - cap.u0) * 0.5f, rv = (cap.v1 - cap.v0) * 0.5f;
@@ -219,6 +219,7 @@ static void build_model(int t)
     gm_init(P);
     gm_init(D);
     gm_init(&cm->wheel);
+    gm_init(&cm->wheel_far);
     gm_init(&cm->cabin);
     for (k = 0; k < 2; k++) {
         gm_init(&cm->door_skin[k]);
@@ -369,7 +370,8 @@ static void build_model(int t)
         }
     }
 
-    build_wheel(&cm->wheel, s->wheel_r, 0.22f);
+    build_wheel(&cm->wheel, s->wheel_r, 0.22f, 10);
+    build_wheel(&cm->wheel_far, s->wheel_r, 0.22f, 6);
 }
 
 void carmodels_build(void)
@@ -412,32 +414,60 @@ static void append_painted(GMesh *out, const GMesh *src, const Xf *xf, unsigned 
     }
 }
 
-void car_append_mesh(GMesh *out, const Car *c)
+/* Per car slot: the model with this car's paint baked in, built once when
+ * the slot gets a new car; every frame only matrices change. */
+typedef struct {
+    int valid, type;
+    unsigned int paint;
+    GMesh body;     /* painted panels + details */
+    GMesh door[2];  /* painted door skin + its window */
+} CarInstance;
+
+static CarInstance inst[MAX_CARS + 1];
+
+static const CarInstance *instance(const Car *c)
+{
+    int slot = (c >= cars && c < cars + MAX_CARS) ? (int)(c - cars) : MAX_CARS;
+    CarInstance *ci = &inst[slot];
+    const CarModel *cm = &models[c->type];
+    Xf id = xf_identity();
+    int k;
+    if (ci->valid && ci->type == c->type && ci->paint == c->paint && slot < MAX_CARS) return ci;
+    gm_free(&ci->body);
+    append_painted(&ci->body, &cm->paint, &id, c->paint);
+    gm_append_xf(&ci->body, &cm->detail, &id);
+    for (k = 0; k < 2; k++) {
+        gm_free(&ci->door[k]);
+        append_painted(&ci->door[k], &cm->door_skin[k], &id, c->paint);
+        gm_append_xf(&ci->door[k], &cm->door_glass[k], &id);
+    }
+    ci->valid = 1;
+    ci->type = c->type;
+    ci->paint = c->paint;
+    return ci;
+}
+
+void car_draw(DrawList *dl, const Car *c, int near)
 {
     const CarSpec *s = &CAR_SPECS[c->type];
     const CarModel *cm = &models[c->type];
+    const CarInstance *ci = instance(c);
     Xf body = body_xf(c);
-    int w;
-    append_painted(out, &cm->paint, &body, c->paint);
-    gm_append_xf(out, &cm->detail, &body);
-    {
-        int k;
-        for (k = 0; k < 2; k++) {
-            if (c->door > 0.02f && c->door_side == k) {
-                /* swing about the vertical hinge line at the door's front edge */
-                float sx = k ? 1.0f : -1.0f, hz = zof(s, cm->door_d0);
-                Xf h = xf_translate(v3(sx * s->width * 0.5f, 0, hz)), r = xf_rot_y(sx * c->door * 1.15f);
-                Xf hi = xf_translate(v3(-sx * s->width * 0.5f, 0, -hz)), a1 = xf_mul(&body, &h), a2 = xf_mul(&a1, &r);
-                Xf m = xf_mul(&a2, &hi);
-                append_painted(out, &cm->door_skin[k], &m, c->paint);
-                gm_append_xf(out, &cm->door_glass[k], &m);
-                gm_append_xf(out, &cm->door_trim[k], &m);
-                gm_append_xf(out, &cm->cabin, &body);
-                gm_append_xf(out, &cm->cabin_wall[1 - k], &body);
-            } else {
-                append_painted(out, &cm->door_skin[k], &body, c->paint);
-                gm_append_xf(out, &cm->door_glass[k], &body);
-            }
+    int w, k;
+    dl_add(dl, ci->body.v, ci->body.n, &body);
+    for (k = 0; k < 2; k++) {
+        if (c->door > 0.02f && c->door_side == k) {
+            /* swing about the vertical hinge line at the door's front edge */
+            float sx = k ? 1.0f : -1.0f, hz = zof(s, cm->door_d0);
+            Xf h = xf_translate(v3(sx * s->width * 0.5f, 0, hz)), r = xf_rot_y(sx * c->door * 1.15f);
+            Xf hi = xf_translate(v3(-sx * s->width * 0.5f, 0, -hz)), a1 = xf_mul(&body, &h), a2 = xf_mul(&a1, &r);
+            Xf m = xf_mul(&a2, &hi);
+            dl_add(dl, ci->door[k].v, ci->door[k].n, &m);
+            dl_add(dl, cm->door_trim[k].v, cm->door_trim[k].n, &m);
+            dl_add(dl, cm->cabin.v, cm->cabin.n, &body);
+            dl_add(dl, cm->cabin_wall[1 - k].v, cm->cabin_wall[1 - k].n, &body);
+        } else {
+            dl_add(dl, ci->door[k].v, ci->door[k].n, &body);
         }
     }
     /* wheels follow the ground, not the body roll */
@@ -447,6 +477,16 @@ void car_append_mesh(GMesh *out, const Car *c)
         Xf yaw = xf_rot_y(c->yaw), hub = xf_translate(v3(x, s->wheel_r, z));
         Xf steer = xf_rot_y(w < 2 ? c->steer : 0.0f), spin = xf_rot_x(-c->wheel_spin);
         Xf m1 = xf_mul(&base, &yaw), m2 = xf_mul(&m1, &hub), m3 = xf_mul(&m2, &steer), m4 = xf_mul(&m3, &spin);
-        gm_append_xf(out, &cm->wheel, &m4);
+        if (near) dl_add(dl, cm->wheel.v, cm->wheel.n, &m4);
+        else dl_add(dl, cm->wheel_far.v, cm->wheel_far.n, &m4);
     }
+}
+
+void car_append_mesh(GMesh *out, const Car *c)
+{
+    DrawList dl;
+    dl_init(&dl);
+    car_draw(&dl, c, 1);
+    dl_flatten(&dl, out);
+    dl_free(&dl);
 }

@@ -55,6 +55,54 @@ void gm_box_xf(GMesh *m, const Xf *xf, V3 lo, V3 hi, const UVRect uvs[6], unsign
 /* Appends src transformed by xf (positions only, colours kept). */
 void gm_append_xf(GMesh *dst, const GMesh *src, const Xf *xf);
 
+/* Vertex with a normal, lit by the GE: matches GU_TEXTURE_32BITF |
+ * GU_COLOR_8888 | GU_NORMAL_32BITF | GU_VERTEX_32BITF. color is the
+ * unlit material colour. */
+typedef struct {
+    float u, v;
+    unsigned int color;
+    float nx, ny, nz;
+    float x, y, z;
+} LVertex;
+
+typedef struct {
+    LVertex *v;
+    int n, cap;
+} LMesh;
+
+void lm_init(LMesh *m);
+void lm_free(LMesh *m);
+int  lm_reserve(LMesh *m, int extra);
+/* adds a vertex transformed by xf (point and normal) */
+void lm_vertex(LMesh *m, const Xf *xf, V3 p, V3 n, float u, float v, unsigned int color);
+/* lit box (faces as in gm_box) */
+void lm_box(LMesh *m, const Xf *xf, V3 lo, V3 hi, const UVRect uvs[6], unsigned int color, int faces);
+
+/* Things that move are not rebuilt vertex by vertex every frame: their
+ * meshes are built once and each frame only (mesh, matrix) pairs are
+ * listed. The PSP draws them with the GE transforming (and lighting) the
+ * vertices; the PC preview and the tests flatten the list on the CPU. */
+typedef struct {
+    const void *v;      /* GVertex (lit = 0) or LVertex (lit = 1) */
+    int n;
+    int lit;
+    Xf xf;
+} DrawItem;
+
+typedef struct {
+    DrawItem *items;
+    int n, cap;
+    int verts;          /* total vertices listed (for budgets) */
+} DrawList;
+
+void dl_init(DrawList *d);
+void dl_free(DrawList *d);
+void dl_clear(DrawList *d);
+void dl_add(DrawList *d, const GVertex *v, int n, const Xf *xf);
+void dl_add_lit(DrawList *d, const LVertex *v, int n, const Xf *xf);
+/* world-space, CPU-lit copy of everything listed */
+void dl_flatten(const DrawList *d, GMesh *out);
+
 /* The PSP GE drops a whole triangle when a vertex in front of the camera
  * projects outside its 4096x4096 drawing area (PPSSPP emulates this): big
  * ground quads next to the camera vanish and the sky shows through. The fix

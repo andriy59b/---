@@ -19,6 +19,7 @@ void rs_init(Raster *r, int w, int h, const unsigned int *atlas)
     r->mip[0] = atlas;
     r->levels = 1;
     r->near_z = 0.1f;
+    r->tw = r->th = TEX_SIZE;
 }
 
 void rs_free(Raster *r)
@@ -69,11 +70,12 @@ typedef struct { float x, y, z, u, v; float c[4]; } PV;
 
 static void texel(const Raster *r, int l, int tx, int ty, float out[4])
 {
-    int size = TEX_SIZE >> l;
+    int w = r->tw >> l, h = r->th >> l;
     unsigned int t;
-    tx = tx < 0 ? 0 : (tx >= size ? size - 1 : tx);
-    ty = ty < 0 ? 0 : (ty >= size ? size - 1 : ty);
-    t = r->mip[l][ty * size + tx];
+    if (r->wrap_u) tx = ((tx % w) + w) % w;
+    else tx = tx < 0 ? 0 : (tx >= w ? w - 1 : tx);
+    ty = ty < 0 ? 0 : (ty >= h ? h - 1 : ty);
+    t = r->mip[l][ty * w + tx];
     out[0] = (t & 0xFF) / 255.0f;
     out[1] = ((t >> 8) & 0xFF) / 255.0f;
     out[2] = ((t >> 16) & 0xFF) / 255.0f;
@@ -82,12 +84,12 @@ static void texel(const Raster *r, int l, int tx, int ty, float out[4])
 
 static void sample_level(const Raster *r, int l, float u, float v, int linear, float out[4])
 {
-    int size = TEX_SIZE >> l, k;
+    int w = r->tw >> l, h = r->th >> l, k;
     if (!linear) {
-        texel(r, l, (int)floorf(u * size), (int)floorf(v * size), out);
+        texel(r, l, (int)floorf(u * w), (int)floorf(v * h), out);
         return;
     } else {
-        float fx = u * size - 0.5f, fy = v * size - 0.5f, a[4], b[4], c[4], d[4];
+        float fx = u * w - 0.5f, fy = v * h - 0.5f, a[4], b[4], c[4], d[4];
         int x0 = (int)floorf(fx), y0 = (int)floorf(fy);
         float tx = fx - x0, ty = fy - y0;
         texel(r, l, x0, y0, a);
@@ -205,8 +207,9 @@ static void raster_tri(Raster *r, const PV *a, const PV *b, const PV *c)
                         du[s2] = (a0 * p[0]->u * iz[0] + a1 * p[1]->u * iz[1] + a2 * p[2]->u * iz[2]) / zz - u;
                         dv[s2] = (a0 * p[0]->v * iz[0] + a1 * p[1]->v * iz[1] + a2 * p[2]->v * iz[2]) / zz - v;
                     }
-                    m = fmaxf(du[0] * du[0] + dv[0] * dv[0], du[1] * du[1] + dv[1] * dv[1]);
-                    lod = 0.5f * log2f(m * TEX_SIZE * TEX_SIZE + 1e-20f);
+                    m = fmaxf(du[0] * du[0] * r->tw * r->tw + dv[0] * dv[0] * r->th * r->th,
+                              du[1] * du[1] * r->tw * r->tw + dv[1] * dv[1] * r->th * r->th);
+                    lod = 0.5f * log2f(m + 1e-20f);
                 }
                 sample(r, u, v, lod, tc);
                 t = ((unsigned int)(tc[3] * 255.0f + 0.5f) << 24) | ((unsigned int)(tc[2] * 255.0f + 0.5f) << 16) |

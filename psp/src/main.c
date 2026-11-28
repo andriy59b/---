@@ -41,7 +41,6 @@ static const char LEVEL_MAGIC[8] = { 'U', 'K', 'R', 'C', 'R', '0', '0', '2' };
 static Level L;
 static Ped peds[N_ACTORS];
 static Ped extras[MAX_EXTRAS];
-#define PED_DETAIL_DIST 24.0f /* closer than this: the detailed model */
 static float punch_guard; /* fists stay up a while after a punch */
 static float extra_t[MAX_EXTRAS];
 static Ped *player = &peds[A_ANDRIY];
@@ -72,7 +71,7 @@ static int radio_track_i;
 static float radio_timer;
 static char radio_buf[96];
 
-static GMesh dyn;
+static DrawList dyn;   /* moving things: (mesh, matrix) pairs */
 
 /* ------------------------------------------------------------- callbacks */
 
@@ -417,7 +416,7 @@ static void build_dynamic(V3 eye, float yaw, float radius)
 {
     V3 f = yaw_fwd(yaw);
     int i;
-    dyn.n = 0;
+    dl_clear(&dyn);
     for (i = 0; i < MAX_CARS; i++) {
         const Car *c = &cars[i];
         V3 d;
@@ -425,7 +424,7 @@ static void build_dynamic(V3 eye, float yaw, float radius)
         d = v3_sub(c->pos, eye);
         if (d.x * d.x + d.z * d.z > radius * radius) continue;
         if (d.x * f.x + d.z * f.z < -8.0f) continue;
-        car_append_mesh(&dyn, c);
+        car_draw(&dyn, c, d.x * d.x + d.z * d.z < CAR_NEAR * CAR_NEAR);
     }
     for (i = 0; i < N_ACTORS; i++) {
         const Ped *p = &peds[i];
@@ -433,12 +432,12 @@ static void build_dynamic(V3 eye, float yaw, float radius)
         if (!p->active) continue;
         if (p == player && L.first_person && pstate == P_FOOT && mode != MODE_CUTSCENE) continue;
         d = v3_sub(p->pos, eye);
-        if (d.x * d.x + d.z * d.z > 90.0f * 90.0f) continue;
-        ped_append_mesh_lod(&dyn, p, d.x * d.x + d.z * d.z < PED_DETAIL_DIST * PED_DETAIL_DIST);
+        if (d.x * d.x + d.z * d.z > 90.0f * 90.0f || d.x * f.x + d.z * f.z < -2.0f) continue;
+        ped_draw(&dyn, p, ped_lod(sqrtf(d.x * d.x + d.z * d.z)));
     }
     for (i = 0; i < MAX_EXTRAS; i++)
-        if (extras[i].active) ped_append_mesh_lod(&dyn, &extras[i], 1);
-    if (mode != MODE_CUTSCENE) crowd_append_meshes(&dyn, eye, 70.0f, 16.0f);
+        if (extras[i].active) ped_draw(&dyn, &extras[i], ped_lod(v3_len(v3_sub(extras[i].pos, eye))));
+    if (mode != MODE_CUTSCENE) crowd_draw(&dyn, eye, f, 70.0f, 16.0f);
 }
 
 static void draw_world(V3 eye, float yaw, float pitch, const SkyState *sky, float radius, int markers)
@@ -459,7 +458,7 @@ static void draw_world(V3 eye, float yaw, float pitch, const SkyState *sky, floa
         for (i = 0; i < CROWD_MAX; i++)
             if (crowd[i].state != WK_FREE) r_shadow(crowd[i].ped.pos, 0.42f, 0.42f, 0.0f, 0.7f);
     build_dynamic(eye, yaw, radius);
-    r_mesh(&dyn, sky);
+    r_draw_list(&dyn, sky);
     r_night_overlay(sky);
     r_glow(eye, radius, sky->night);
     if (sky->night > 0.3f)
@@ -499,7 +498,7 @@ int main(void)
 
     r_init();
     audio_start();
-    gm_init(&dyn);
+    dl_init(&dyn);
 
     /* build the town once, with a loading screen */
     r_begin_frame(0xFF000000u);

@@ -340,22 +340,34 @@ int crowd_update(float dt, Ped *player, V3 focus, int do_spawn)
     return ev;
 }
 
-#define CROWD_DETAILED 4   /* at most this many get the detailed model (CPU time on the PSP) */
+#define CROWD_DETAILED 3   /* at most this many get the full model */
 
-void crowd_append_meshes(GMesh *m, V3 eye, float radius, float near)
+void crowd_draw(DrawList *dl, V3 eye, V3 fwd, float radius, float near)
 {
     float d2[CROWD_MAX];
     int i, j, detailed[CROWD_MAX];
     for (i = 0; i < CROWD_MAX; i++) {
         V3 d = v3_sub(crowd[i].ped.pos, eye);
-        d2[i] = crowd[i].state == WK_FREE ? 1e30f : d.x * d.x + d.z * d.z;
+        /* behind the camera: not drawn */
+        d2[i] = (crowd[i].state == WK_FREE || d.x * fwd.x + d.z * fwd.z < -2.0f) ? 1e30f : d.x * d.x + d.z * d.z;
     }
     for (i = 0; i < CROWD_MAX; i++) {
         int closer = 0;
         for (j = 0; j < CROWD_MAX; j++)
             if (d2[j] < d2[i] || (d2[j] == d2[i] && j < i)) closer++;
-        detailed[i] = d2[i] < near * near && closer < CROWD_DETAILED;
+        detailed[i] = ped_lod(sqrtf(d2[i]));
+        if (detailed[i] == PED_LOD_FULL && closer >= CROWD_DETAILED) detailed[i] = PED_LOD_MEDIUM;
     }
+    (void)near;
     for (i = 0; i < CROWD_MAX; i++)
-        if (d2[i] <= radius * radius) ped_append_mesh_lod(m, &crowd[i].ped, detailed[i]);
+        if (d2[i] <= radius * radius) ped_draw(dl, &crowd[i].ped, detailed[i]);
+}
+
+void crowd_append_meshes(GMesh *m, V3 eye, float radius, float near)
+{
+    DrawList dl;
+    dl_init(&dl);
+    crowd_draw(&dl, eye, v3(0, 0, 0), radius, near);
+    dl_flatten(&dl, m);
+    dl_free(&dl);
 }

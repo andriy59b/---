@@ -36,6 +36,34 @@ static unsigned int epoch;
 static GMesh *M, *G;
 static unsigned int g_seed;
 
+/* Small things (balconies, canopies, parapets, lamps, benches, bushes,
+ * goods on the stalls) go to the end of a cell's mesh: far cells are drawn
+ * without them. */
+static GMesh detail_mesh;
+static GMesh *detail_keep;
+#define DETAIL_BEGIN() (detail_keep = M, M = &detail_mesh)
+#define DETAIL_END() (M = detail_keep)
+
+/* Ground pieces and kerbs of the cell being built: merged into long strips
+ * (see emit_ground) instead of written as 4 m quads. */
+typedef struct {
+    float a0, a1;     /* along u */
+    float b0, b1;     /* across (v) */
+    float y, len;     /* height; length of one texture repeat */
+    int row, rot;     /* ground texture row; rot: u runs along z */
+} GroundRect;
+
+typedef struct {
+    int axis;         /* 0: runs along x, 1: along z */
+    float fixed;      /* the other coordinate */
+    float s0, s1;     /* from, to (direction kept: it decides the facing) */
+} Kerb;
+
+static GroundRect *grects;
+static int ngrects, capgrects;
+static Kerb *kerbs;
+static int nkerbs, capkerbs;
+
 static unsigned int hash3(int a, int b, int c)
 {
     unsigned int h = (unsigned int)a * 0x8DA6B343u ^ (unsigned int)b * 0xD8163841u ^ (unsigned int)c * 0xCB1AB31Fu ^ g_seed;
@@ -199,8 +227,139 @@ int city_lot_type(int li, int lj)
 
 /* --------------------------------------------------------- mesh helpers */
 
+static void ground_quad(float x0, float z0, float x1, float z1, float y, int tile, int rot, unsigned int tint);
+
 /* Horizontal quad; u runs along x (or along z when rot) */
 static void ground(float x0, float z0, float x1, float z1, float y, int tile, int rot, unsigned int tint)
+{
+    int row = ground_row(tile);
+    if (row >= 0 && tint == WHITE) {
+        GroundRect *r;
+        if (ngrects >= capgrects) {
+            int cap = capgrects ? capgrects * 2 : 256;
+            GroundRect *n = (GroundRect *)realloc(grects, sizeof(GroundRect) * (size_t)cap);
+            if (!n) return;
+            grects = n;
+            capgrects = cap;
+        }
+        r = &grects[ngrects++];
+        r->a0 = rot ? z0 : x0;
+        r->a1 = rot ? z1 : x1;
+        r->b0 = rot ? x0 : z0;
+        r->b1 = rot ? x1 : z1;
+        r->y = y;
+        r->len = r->a1 - r->a0;
+        r->row = row;
+        r->rot = rot;
+        return;
+    }
+    ground_quad(x0, z0, x1, z1, y, tile, rot, tint);
+}
+
+static void kerb(float ax, float az, float bx, float bz)
+{
+    Kerb *k;
+    if (nkerbs >= capkerbs) {
+        int cap = capkerbs ? capkerbs * 2 : 128;
+        Kerb *n = (Kerb *)realloc(kerbs, sizeof(Kerb) * (size_t)cap);
+        if (!n) return;
+        kerbs = n;
+        capkerbs = cap;
+    }
+    k = &kerbs[nkerbs++];
+    k->axis = fabsf(bz - az) > fabsf(bx - ax);
+    k->fixed = k->axis ? ax : az;
+    k->s0 = k->axis ? az : ax;
+    k->s1 = k->axis ? bz : bx;
+}
+
+static int cmp_rect(const void *pa, const void *pb)
+{
+    const GroundRect *a = (const GroundRect *)pa, *b = (const GroundRect *)pb;
+    if (a->rot != b->rot) return a->rot - b->rot;
+    if (a->row != b->row) return a->row - b->row;
+    if (a->y != b->y) return a->y < b->y ? -1 : 1;
+    if (a->b0 != b->b0) return a->b0 < b->b0 ? -1 : 1;
+    if (a->b1 != b->b1) return a->b1 < b->b1 ? -1 : 1;
+    if (a->len != b->len) return a->len < b->len ? -1 : 1;
+    return a->a0 < b->a0 ? -1 : (a->a0 > b->a0);
+}
+
+static int cmp_kerb(const void *pa, const void *pb)
+{
+    const Kerb *a = (const Kerb *)pa, *b = (const Kerb *)pb;
+    int da = a->s1 > a->s0, db = b->s1 > b->s0;
+    float la = da ? a->s0 : a->s1, lb = db ? b->s0 : b->s1;
+    if (a->axis != b->axis) return a->axis - b->axis;
+    if (a->fixed != b->fixed) return a->fixed < b->fixed ? -1 : 1;
+    if (da != db) return da - db;
+    return la < lb ? -1 : (la > lb);
+}
+
+static void put_quad(GMesh *m, V3 p0, V3 p1, V3 p2, V3 p3, const float *u, const float *v, unsigned int c)
+{
+    gm_tri(m, p0, p1, p2, u[0], v[0], u[1], v[1], u[2], v[2], c);
+    gm_tri(m, p0, p2, p3, u[0], v[0], u[2], v[2], u[3], v[3], c);
+}
+
+/* Merges the cell's ground pieces into strips along u and its kerbs into
+ * long runs, written to the cell's ground mesh. */
+static void emit_ground(GMesh *out)
+{
+    int i, j;
+    unsigned int up = gfx_shade(v3(0, 1, 0), WHITE);
+    if (ngrects > 1) qsort(grects, (size_t)ngrects, sizeof(GroundRect), cmp_rect);
+    for (i = 0; i < ngrects; i = j) {
+        GroundRect r = grects[i];
+        float v0, v1, U, us[4], vs[4];
+        for (j = i + 1; j < ngrects; j++) {
+            const GroundRect *n = &grects[j];
+            if (n->rot != r.rot || n->row != r.row || n->y != r.y || n->b0 != r.b0 || n->b1 != r.b1 || n->len != r.len ||
+                fabsf(n->a0 - r.a1) > 0.01f)
+                break;
+            r.a1 = n->a1;
+        }
+        ground_row_v(r.row, &v0, &v1);
+        U = (r.a1 - r.a0) / r.len;
+        if (!r.rot) {
+            /* u along x; v: z0 -> v0, z1 -> v1 (as the atlas quads) */
+            us[0] = 0; vs[0] = v1; us[1] = 0; vs[1] = v0; us[2] = U; vs[2] = v0; us[3] = U; vs[3] = v1;
+            put_quad(out, v3(r.a0, r.y, r.b1), v3(r.a0, r.y, r.b0), v3(r.a1, r.y, r.b0), v3(r.a1, r.y, r.b1), us, vs, up);
+        } else {
+            /* u along z; v: x0 -> v1, x1 -> v0 */
+            us[0] = U; vs[0] = v1; us[1] = 0; vs[1] = v1; us[2] = 0; vs[2] = v0; us[3] = U; vs[3] = v0;
+            put_quad(out, v3(r.b0, r.y, r.a1), v3(r.b0, r.y, r.a0), v3(r.b1, r.y, r.a0), v3(r.b1, r.y, r.a1), us, vs, up);
+        }
+    }
+    if (nkerbs > 1) qsort(kerbs, (size_t)nkerbs, sizeof(Kerb), cmp_kerb);
+    for (i = 0; i < nkerbs; i = j) {
+        Kerb k = kerbs[i];
+        int dir = k.s1 > k.s0;
+        float lo = dir ? k.s0 : k.s1, hi = dir ? k.s1 : k.s0, v0, v1, us[4], vs[4];
+        V3 a, b, p0, p1, p2, p3, nrm;
+        for (j = i + 1; j < nkerbs; j++) {
+            const Kerb *n = &kerbs[j];
+            int nd = n->s1 > n->s0;
+            float nlo = nd ? n->s0 : n->s1, nhi = nd ? n->s1 : n->s0;
+            if (n->axis != k.axis || n->fixed != k.fixed || nd != dir || fabsf(nlo - hi) > 0.01f) break;
+            hi = nhi;
+        }
+        ground_row_v(GROUND_ROW_KERB, &v0, &v1);
+        a = k.axis ? v3(k.fixed, 0, dir ? lo : hi) : v3(dir ? lo : hi, 0, k.fixed);
+        b = k.axis ? v3(k.fixed, 0, dir ? hi : lo) : v3(dir ? hi : lo, 0, k.fixed);
+        p0 = v3(a.x, 0.0f, a.z);
+        p1 = v3(a.x, WALK_H, a.z);
+        p2 = v3(b.x, WALK_H, b.z);
+        p3 = v3(b.x, 0.0f, b.z);
+        nrm = v3_cross(v3_sub(p1, p0), v3_sub(p3, p0));
+        us[0] = 0; vs[0] = v1; us[1] = 0; vs[1] = v0; us[2] = (hi - lo) / 4.0f; vs[2] = v0; us[3] = us[2]; vs[3] = v1;
+        put_quad(out, p0, p1, p2, p3, us, vs, gfx_shade(v3_scale(nrm, -1.0f), WHITE));
+    }
+    ngrects = 0;
+    nkerbs = 0;
+}
+
+static void ground_quad(float x0, float z0, float x1, float z1, float y, int tile, int rot, unsigned int tint)
 {
     UVRect uv = uv_tile(tile);
     V3 a = v3(x0, y, z1), b = v3(x0, y, z0), c = v3(x1, y, z0), d = v3(x1, y, z1);
@@ -316,14 +475,17 @@ static void block_of_flats(float x0, float z0, float x1, float z1, int floors, P
     facade(x0, z0, x0, z1, y0, floors, fh, 3.2f, pick, -1, seed, NULL, 0);        /* -x */
     ground(x0, z0, x1, z1, H, T_ROOF_FLAT, 0, WHITE);
     /* parapet and a lift room on the roof */
+    DETAIL_BEGIN();
     box(x0, H, z0, x1, H + 0.5f, z0 + 0.25f, T_CONCRETE, T_CONCRETE, WHITE, 0);
     box(x0, H, z1 - 0.25f, x1, H + 0.5f, z1, T_CONCRETE, T_CONCRETE, WHITE, 0);
     box(x0, H, z0 + 0.25f, x0 + 0.25f, H + 0.5f, z1 - 0.25f, T_CONCRETE, T_CONCRETE, WHITE, 0); /* no overlap at the corners */
     box(x1 - 0.25f, H, z0 + 0.25f, x1, H + 0.5f, z1 - 0.25f, T_CONCRETE, T_CONCRETE, WHITE, 0);
+    DETAIL_END();
     box((x0 + x1) / 2 - 1.5f, H, (z0 + z1) / 2 - 1.5f, (x0 + x1) / 2 + 1.5f, H + 2.5f, (z0 + z1) / 2 + 1.5f,
         T_PANEL_BLANK, T_ROOF_FLAT, WHITE, 0);
     add_box(x0, 0.0f, z0, x1, H, z1);
-    /* entrance canopies */
+    /* entrance canopies and balconies */
+    DETAIL_BEGIN();
     for (f = 0; f < ndoors; f++) {
         float dx = x0 + doors[f];
         gm_box(M, v3(dx - 1.2f, y0 + 2.5f, z1), v3(dx + 1.2f, y0 + 2.65f, z1 + 1.3f), uv_tile(T_CONCRETE),
@@ -340,6 +502,7 @@ static void block_of_flats(float x0, float z0, float x1, float z1, int floors, P
                 vquad(x - 1.4f, z0 - 1.1f, x - 1.4f, z0, ya + 0.05f, ya + 1.05f, uv_sub(T_BALCONY, 0, 22, 32, 42), WHITE);
                 vquad(x + 1.4f, z0, x + 1.4f, z0 - 1.1f, ya + 0.05f, ya + 1.05f, uv_sub(T_BALCONY, 32, 22, 32, 42), WHITE);
             }
+    DETAIL_END();
 }
 
 static void gable_house(float x0, float z0, float x1, float z1, int roof_tile, unsigned int seed)
@@ -413,15 +576,18 @@ static void stall(float x, float z)
     gm_quad(M, v3(x - 0.2f, y0 + 2.0f, z - 0.4f), v3(x - 0.2f, y0 + 2.5f, z + 2.0f), v3(x + 3.8f, y0 + 2.5f, z + 2.0f),
             v3(x + 3.8f, y0 + 2.0f, z - 0.4f), tent, WHITE);
     /* goods: watermelons and boxes */
+    DETAIL_BEGIN();
     box(x + 0.3f, y0 + 0.95f, z + 0.2f, x + 1.0f, y0 + 1.3f, z + 0.7f, T_WHITE, T_WHITE, gfx_rgba(60, 130, 50, 255), 0);
     box(x + 1.4f, y0 + 0.95f, z + 0.15f, x + 2.2f, y0 + 1.25f, z + 0.75f, T_WHITE, T_WHITE, gfx_rgba(230, 160, 40, 255), 0);
     box(x + 2.6f, y0 + 0.95f, z + 0.2f, x + 3.3f, y0 + 1.2f, z + 0.7f, T_WHITE, T_WHITE, gfx_rgba(200, 50, 50, 255), 0);
+    DETAIL_END();
 }
 
 static void bench(float x, float z, int along_x)
 {
     UVRect uv = uv_tile(T_BENCH);
     float w = 1.8f;
+    DETAIL_BEGIN();
     if (along_x) {
         vquad(x - w / 2, z, x + w / 2, z, WALK_H, WALK_H + 1.0f, uv, WHITE);
         add_box(x - w / 2, 0, z - 0.3f, x + w / 2, WALK_H + 0.5f, z + 0.3f);
@@ -429,13 +595,16 @@ static void bench(float x, float z, int along_x)
         vquad(x, z + w / 2, x, z - w / 2, WALK_H, WALK_H + 1.0f, uv, WHITE);
         add_box(x - 0.3f, 0, z - w / 2, x + 0.3f, WALK_H + 0.5f, z + w / 2);
     }
+    DETAIL_END();
 }
 
 static void lamp(float x, float z)
 {
     const unsigned int grey = gfx_rgba(170, 168, 160, 255);
+    DETAIL_BEGIN();
     box(x - 0.12f, WALK_H, z - 0.12f, x + 0.12f, WALK_H + 7.0f, z + 0.12f, T_CONCRETE, T_CONCRETE, grey, 1);
     box(x - 0.6f, WALK_H + 6.9f, z - 0.15f, x + 0.6f, WALK_H + 7.1f, z + 0.15f, T_WHITE, T_WHITE, gfx_rgba(70, 70, 74, 255), 0);
+    DETAIL_END();
 }
 
 /* -------------------------------------------------------------- roads */
@@ -448,8 +617,8 @@ static void road_x(float x0, float x1, float oz)
         int crossing = x - x0 < 4.0f || x1 - xe < 0.01f;
         ground(x, oz, xe, oz + 3.0f, WALK_H, T_SIDEWALK, 0, WHITE);
         ground(x, oz + 13.0f, xe, oz + 16.0f, WALK_H, T_SIDEWALK, 0, WHITE);
-        vquad(x, oz + 3.0f, xe, oz + 3.0f, 0.0f, WALK_H, uv_sub(T_CURB, 0, 0, 64, 16), WHITE);
-        vquad(xe, oz + 13.0f, x, oz + 13.0f, 0.0f, WALK_H, uv_sub(T_CURB, 0, 0, 64, 16), WHITE);
+        kerb(x, oz + 3.0f, xe, oz + 3.0f);
+        kerb(xe, oz + 13.0f, x, oz + 13.0f);
         if (crossing && x - x0 < 4.0f) {
             ground(x, oz + 3.0f, xe, oz + 13.0f, 0.0f, T_CROSSWALK, 1, WHITE);
         } else {
@@ -467,8 +636,8 @@ static void road_z(float z0, float z1, float ox)
         float ze = z + 4.0f < z1 ? z + 4.0f : z1;
         ground(ox, z, ox + 3.0f, ze, WALK_H, T_SIDEWALK, 0, WHITE);
         ground(ox + 13.0f, z, ox + 16.0f, ze, WALK_H, T_SIDEWALK, 0, WHITE);
-        vquad(ox + 3.0f, ze, ox + 3.0f, z, 0.0f, WALK_H, uv_sub(T_CURB, 0, 0, 64, 16), WHITE);
-        vquad(ox + 13.0f, z, ox + 13.0f, ze, 0.0f, WALK_H, uv_sub(T_CURB, 0, 0, 64, 16), WHITE);
+        kerb(ox + 3.0f, ze, ox + 3.0f, z);
+        kerb(ox + 13.0f, z, ox + 13.0f, ze);
         if (z - z0 < 4.0f) {
             ground(ox + 3.0f, z, ox + 13.0f, ze, 0.0f, T_CROSSWALK, 0, WHITE);
         } else {
@@ -491,14 +660,14 @@ static void intersection(float ox, float oz)
         ground(x0, z0, x0 + 3.0f, z0 + 3.0f, WALK_H, T_SIDEWALK, 0, WHITE);
     }
     /* kerbs around the corners */
-    vquad(ox + 3, oz + 3, ox, oz + 3, 0, WALK_H, uv_sub(T_CURB, 0, 0, 48, 16), WHITE);
-    vquad(ox + 3, oz, ox + 3, oz + 3, 0, WALK_H, uv_sub(T_CURB, 0, 0, 48, 16), WHITE);
-    vquad(ox + 16, oz + 3, ox + 13, oz + 3, 0, WALK_H, uv_sub(T_CURB, 0, 0, 48, 16), WHITE);
-    vquad(ox + 13, oz + 3, ox + 13, oz, 0, WALK_H, uv_sub(T_CURB, 0, 0, 48, 16), WHITE);
-    vquad(ox, oz + 13, ox + 3, oz + 13, 0, WALK_H, uv_sub(T_CURB, 0, 0, 48, 16), WHITE);
-    vquad(ox + 3, oz + 13, ox + 3, oz + 16, 0, WALK_H, uv_sub(T_CURB, 0, 0, 48, 16), WHITE);
-    vquad(ox + 13, oz + 13, ox + 16, oz + 13, 0, WALK_H, uv_sub(T_CURB, 0, 0, 48, 16), WHITE);
-    vquad(ox + 13, oz + 16, ox + 13, oz + 13, 0, WALK_H, uv_sub(T_CURB, 0, 0, 48, 16), WHITE);
+    kerb(ox + 3, oz + 3, ox, oz + 3);
+    kerb(ox + 3, oz, ox + 3, oz + 3);
+    kerb(ox + 16, oz + 3, ox + 13, oz + 3);
+    kerb(ox + 13, oz + 3, ox + 13, oz);
+    kerb(ox, oz + 13, ox + 3, oz + 13);
+    kerb(ox + 3, oz + 13, ox + 3, oz + 16);
+    kerb(ox + 13, oz + 13, ox + 16, oz + 13);
+    kerb(ox + 13, oz + 16, ox + 13, oz + 13);
 }
 
 /* Lot ground as 4 m cells, one surface each: no overlapping decals (they
@@ -541,7 +710,9 @@ static void lot_panel5(float ox, float oz, unsigned int s)
     billboard(ox + 18, WALK_H, oz + 54, 6, 8, T_BIRCH, 1);
     billboard(ox + 38, WALK_H, oz + 56, 6, 9, T_BIRCH, 1);
     billboard(ox + 58, WALK_H, oz + 50, 5, 14, T_POPLAR, 1);
+    DETAIL_BEGIN();
     billboard(ox + 46, WALK_H, oz + 22, 4, 3, T_BUSH, 0);
+    DETAIL_END();
     bench(ox + 31, oz + 44, 1);
     bench(ox + 45, oz + 44, 1);
 }
@@ -585,7 +756,9 @@ static void lot_houses(float ox, float oz, int li, int lj)
         fence(px0, pz0, px0, pz0 + 22);
         fence(px0 + 22, pz0, px0 + 22, pz0 + 22);
         gable_house(px0 + 6, pz0 + 4, px0 + 14, pz0 + 10, (h >> 4) & 1 ? T_SLATE : T_ROOF_RED, h);
+        DETAIL_BEGIN();
         for (k = 0; k < 4; k++) billboard(px0 + 4 + k * 4.5f, WALK_H, pz0 + 17, 3.6f, 2.4f, T_SUNFLOWERS, 0);
+        DETAIL_END();
         billboard(px0 + 18, WALK_H, pz0 + 6, 5, 7, (h >> 6) & 1 ? T_BIRCH : T_BUSH, 1);
     }
 }
@@ -609,7 +782,9 @@ static void lot_garages(float ox, float oz)
     }
     add_box(ox + 20, 0, oz + 24, ox + 60, WALK_H + 2.6f, oz + 36);
     billboard(ox + 62, WALK_H, oz + 30, 5, 14, T_POPLAR, 1);
+    DETAIL_BEGIN();
     billboard(ox + 18, WALK_H, oz + 46, 4, 3, T_BUSH, 0);
+    DETAIL_END();
 }
 
 static void lot_market(float ox, float oz)
@@ -634,7 +809,9 @@ static void lot_kiosk(float ox, float oz)
     billboard(ox + 22, WALK_H, oz + 22, 6, 9, T_BIRCH, 1);
     billboard(ox + 58, WALK_H, oz + 24, 6, 8, T_BIRCH, 1);
     billboard(ox + 22, WALK_H, oz + 56, 5, 14, T_POPLAR, 1);
+    DETAIL_BEGIN();
     billboard(ox + 58, WALK_H, oz + 58, 4, 3, T_BUSH, 0);
+    DETAIL_END();
 }
 
 static void lot_park(float ox, float oz, int li, int lj)
@@ -657,8 +834,10 @@ static void lot_empty(float ox, float oz, int li, int lj)
 {
     int k;
     lot_ground(ox, oz, g_yard, li, lj);
+    DETAIL_BEGIN();
     for (k = 0; k < 6; k++)
         billboard(ox + 20 + hf(li, lj, 40 + k) * 40, WALK_H, oz + 20 + hf(li, lj, 50 + k) * 40, 4, 3, T_BUSH, 0);
+    DETAIL_END();
 }
 
 /* --------------------------------------------------------- countryside */
@@ -715,6 +894,8 @@ static void build_cell(int i, int j)
     float ox = i * LOT, oz = j * LOT;
     M = &c->solid;
     G = &c->glow;
+    ngrects = 0;
+    nkerbs = 0;
     c->i = i;
     c->j = j;
     c->cx = ox + LOT / 2;
@@ -760,9 +941,13 @@ void city_free(void)
         for (b = 0; b < CELLS; b++) {
             gm_free(&cells[a][b].solid);
             gm_free(&cells[a][b].glow);
+            gm_free(&cells[a][b].ground);
             free(cells[a][b].chunks);
             cells[a][b].chunks = NULL;
             cells[a][b].nchunks = 0;
+            free(cells[a][b].gchunks);
+            cells[a][b].gchunks = NULL;
+            cells[a][b].ngchunks = 0;
         }
     for (a = 0; a < GRID_N * GRID_N; a++) {
         free(grid_items[a]);
@@ -774,6 +959,13 @@ void city_free(void)
     nboxes = capboxes = 0;
     free(stamps);
     stamps = NULL;
+    gm_free(&detail_mesh);
+    free(grects);
+    grects = NULL;
+    ngrects = capgrects = 0;
+    free(kerbs);
+    kerbs = NULL;
+    nkerbs = capkerbs = 0;
 }
 
 void city_build(unsigned int seed)
@@ -787,6 +979,16 @@ void city_build(unsigned int seed)
             CityCell *c;
             build_cell(i, j);
             c = city_cell(i, j);
+            c->core_n = c->solid.n;
+            {
+                Xf id = xf_identity();
+                gm_append_xf(&c->solid, &detail_mesh, &id);
+                detail_mesh.n = 0;
+            }
+            emit_ground(&c->ground);
+            c->gchunks = (GChunk *)malloc(sizeof(GChunk) * (size_t)(c->ground.n / 3 + 1));
+            c->ngchunks = c->gchunks ? gm_chunks(c->ground.v, c->ground.n, c->gchunks, c->ground.n / 3 + 1) : 0;
+            if (c->ngchunks < 0) c->ngchunks = 0;
             c->chunks = (GChunk *)malloc(sizeof(GChunk) * (size_t)(c->solid.n / 3 + 1));
             c->nchunks = c->chunks ? gm_chunks(c->solid.v, c->solid.n, c->chunks, c->solid.n / 3 + 1) : 0;
             if (c->nchunks < 0) c->nchunks = 0;
@@ -814,4 +1016,36 @@ float city_raycast(V3 from, V3 dir, float maxd)
                 return t;
     }
     return maxd;
+}
+
+/* --------------------------------------------------------------- drawing */
+
+static int cell_visible(const CityCell *c, V3 eye, float fx, float fz, float pitch, float radius)
+{
+    float vx = c->cx - eye.x, vz = c->cz - eye.z, d = sqrtf(vx * vx + vz * vz), half, r;
+    if (d > radius + 46.0f) return 0;
+    if (d < 70.0f || fabsf(pitch) > 1.0f) return 1;
+    r = 46.0f / d;
+    half = 0.95f + fabsf(pitch) * 0.5f + asinf(r > 1.0f ? 1.0f : r);
+    if (half >= 3.1f) return 1;
+    return (vx * fx + vz * fz) / d >= cosf(half);
+}
+
+int city_visible_cells(V3 eye, float yaw, float pitch, float radius, CellDraw *out)
+{
+    float fx = -sinf(yaw), fz = -cosf(yaw);
+    int i, j, n = 0;
+    for (j = CELL_MIN; j < CELL_MIN + CELLS; j++)
+        for (i = CELL_MIN; i < CELL_MIN + CELLS; i++) {
+            const CityCell *c = city_cell(i, j);
+            float dx = c->cx - eye.x, dz = c->cz - eye.z;
+            if ((!c->solid.n && !c->ground.n) || !cell_visible(c, eye, fx, fz, pitch, radius)) continue;
+            out[n].cell = c;
+            /* the nearest point of the cell decides */
+            dx = fmaxf(fabsf(dx) - LOT * 0.5f, 0.0f);
+            dz = fmaxf(fabsf(dz) - LOT * 0.5f, 0.0f);
+            out[n].far = dx * dx + dz * dz > CITY_LOD_FAR * CITY_LOD_FAR;
+            n++;
+        }
+    return n;
 }

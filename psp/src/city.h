@@ -25,14 +25,27 @@ typedef struct { float x0, y0, z0, x1, y1, z1; } Box;
 
 typedef struct {
     int i, j;
-    GMesh solid;   /* opaque + alpha-tested */
+    GMesh solid;   /* opaque + alpha-tested, atlas texture */
+    int core_n;    /* solid[0, core_n): what far away cells draw; the rest is small detail */
+    GMesh ground;  /* long strips of ground and kerbs, ground texture (repeats along u) */
     GMesh glow;    /* lit windows, faded in at night */
     float cx, cz;  /* centre */
     GChunk *chunks; /* runs of nearby triangles of solid, for cutting near the camera */
     int nchunks;
+    GChunk *gchunks; /* the same for ground */
+    int ngchunks;
 } CityCell;
 
 void city_build(unsigned int seed);   /* builds all geometry and collision */
+
+/* Cells to draw for a camera, and whether each is far enough to leave out
+ * its small things (see CityCell.core_n). */
+#define CITY_LOD_FAR 96.0f
+typedef struct {
+    const CityCell *cell;
+    int far;
+} CellDraw;
+int  city_visible_cells(V3 eye, float yaw, float pitch, float radius, CellDraw *out);
 void city_free(void);
 CityCell *city_cell(int i, int j);    /* i, j in CELL_MIN .. CELL_MIN+CELLS-1, or NULL */
 int  city_cell_index(float c);        /* world coordinate -> cell index */

@@ -33,10 +33,11 @@ static void test_city(void)
 {
     const V3 *pois[] = { &POI_SPAWN, &POI_GARAGE, &POI_TARAS, &POI_CAR, &POI_MARKET, &POI_GALYA,
                          &POI_KIOSK, &POI_SELLER, &POI_KABAN, &POI_KABAN_NPC };
-    int i, verts = 0, j;
+    int i, verts = 0, ground = 0, j;
     for (j = CELL_MIN; j < CELL_MIN + CELLS; j++)
-        for (i = CELL_MIN; i < CELL_MIN + CELLS; i++) verts += city_cell(i, j)->solid.n;
-    printf("city: %d vertices, %d collision boxes\n", verts, city_box_count());
+        for (i = CELL_MIN; i < CELL_MIN + CELLS; i++) verts += city_cell(i, j)->solid.n, ground += city_cell(i, j)->ground.n;
+    printf("city: %d vertices + %d in ground strips, %d collision boxes\n", verts, ground, city_box_count());
+    CHECK(ground > 0 && ground % 3 == 0);
     CHECK(verts > 100000 && verts % 3 == 0);
     CHECK(city_box_count() > 500);
     for (i = 0; i < (int)(sizeof(pois) / sizeof(pois[0])); i++) {
@@ -559,6 +560,98 @@ static void test_crowd(void)
     crowd_reset(1u);
 }
 
+
+/* What a frame costs, counted the way the PSP renderer draws it: vertices
+ * sent to the GE (city by level of detail, ground strips, the draw list of
+ * cars and people) and vertices cut on the CPU near the camera. Budgets keep
+ * new features from quietly eating the frame rate. */
+typedef struct { int ge, cut, items, dyn; } FrameCost;
+
+static FrameCost frame_cost(V3 eye, float yaw, float pitch, float radius, const Ped *player)
+{
+    static CellDraw vis[CELLS * CELLS];
+    static GVertex buf[20000];
+    FrameCost fc = { 0, 0, 0, 0 };
+    ViewCone cone;
+    DrawList dl;
+    int n = city_visible_cells(eye, yaw, pitch, radius, vis), i, k;
+    view_cone(&cone, eye, yaw, pitch, 6.0f);
+    for (i = 0; i < n; i++) {
+        const CityCell *c = vis[i].cell;
+        int inside = view_cone_contains(&cone, v3(c->cx - LOT * 0.5f, -1.0f, c->cz - LOT * 0.5f), v3(c->cx + LOT * 0.5f, 60.0f, c->cz + LOT * 0.5f));
+        const GMesh *ms[2] = { &c->ground, &c->solid };
+        const GChunk *chs[2] = { c->gchunks, c->chunks };
+        int ncs[2] = { c->ngchunks, c->nchunks }, m;
+        for (m = 0; m < 2; m++) {
+            if (inside) {
+                fc.ge += (m == 1 && vis[i].far) ? c->core_n : ms[m]->n;
+                continue;
+            }
+            for (k = 0; k < ncs[m]; k++) {
+                int s = view_cone_sphere(&cone, chs[m][k].c, chs[m][k].r);
+                if (s > 0) fc.ge += chs[m][k].count;
+                else if (s == 0) {
+                    int out = gm_cone_clip(ms[m]->v + chs[m][k].first, chs[m][k].count, &cone, buf, 20000);
+                    fc.cut += chs[m][k].count;
+                    fc.ge += out > 0 ? out : 0;
+                }
+            }
+        }
+    }
+    dl_init(&dl);
+    for (i = 0; i < MAX_CARS; i++) {
+        V3 d = v3_sub(cars[i].pos, eye);
+        if (cars[i].kind != CK_FREE && d.x * d.x + d.z * d.z < radius * radius && v3_dot(d, yaw_fwd(yaw)) > -8.0f) car_draw(&dl, &cars[i], d.x * d.x + d.z * d.z < CAR_NEAR * CAR_NEAR);
+    }
+    crowd_draw(&dl, eye, yaw_fwd(yaw), 70.0f, 16.0f);
+    if (player) ped_draw(&dl, player, ped_lod(v3_len(v3_sub(player->pos, eye))));
+    fc.ge += dl.verts;
+    fc.dyn = dl.verts;
+    fc.items = dl.n;
+    dl_free(&dl);
+    return fc;
+}
+
+static void test_frame_budget(void)
+{
+    static const struct { const char *name; float x, y, z, yaw, pitch; } SHOTS[] = {
+        { "street", 10.5f, 2.3f, 70.0f, 0.0f, -0.15f },
+        { "yard", 30.0f, 2.3f, 58.0f, 0.5f, -0.1f },
+        { "crossing", 8.0f, 2.3f, 8.0f, 0.8f, -0.1f },
+        { "highway", 300.0f, 2.6f, 10.5f, -PI_F / 2, -0.12f },
+        { "town edge", -150.0f, 2.3f, 140.0f, 0.8f, -0.1f },
+    };
+    const float RADII[2] = { 192.0f, 256.0f };
+    Ped player;
+    int s, r, t, worst = 0, worst_cut = 0;
+    cars_clear();
+    crowd_reset(9u);
+    ped_init(&player, CH_ANDRIY, v3(10.5f, WALK_H, 66.0f), 0.0f);
+    for (t = 0; t < 60 * 20; t++) {
+        cars_update(1.0f / 60, player.pos, &player.pos, 1);
+        crowd_update(1.0f / 60, &player, player.pos, 1);
+    }
+    for (s = 0; s < (int)(sizeof(SHOTS) / sizeof(SHOTS[0])); s++)
+        for (r = 0; r < 2; r++) {
+            int a;
+            for (a = 0; a < 8; a++) {   /* look all around */
+                FrameCost fc = frame_cost(v3(SHOTS[s].x, SHOTS[s].y, SHOTS[s].z), SHOTS[s].yaw + a * PI_F / 4, SHOTS[s].pitch,
+                                          RADII[r], &player);
+                if (fc.ge > worst) worst = fc.ge;
+                if (fc.cut > worst_cut) worst_cut = fc.cut;
+                if (a == 0) printf("frame %-9s r%3.0f: %6d GE vertices, %5d cut on the CPU, %3d draw items (%d vertices)\n", SHOTS[s].name,
+                                   RADII[r], fc.ge, fc.cut, fc.items, fc.dyn);
+            }
+        }
+    /* budgets: keep them when adding things (raise only on purpose) */
+    CHECK(worst <= 60000);
+    CHECK(worst_cut <= 4000);
+    printf("frame budget: worst %d GE vertices, %d cut; person %d / %d vertices (full / medium)\n", worst, worst_cut,
+           ped_model_verts(CH_ANDRIY, PED_LOD_FULL), ped_model_verts(CH_ANDRIY, PED_LOD_MEDIUM));
+    cars_clear();
+    crowd_reset(1u);
+}
+
 static void test_cutscenes_and_story(void)
 {
     static Ped actors[N_ACTORS];
@@ -688,6 +781,7 @@ int main(void)
     test_ride();
     test_car_doors();
     test_crowd();
+    test_frame_budget();
     test_cutscenes_and_story();
     test_audio();
     CHECK(cs_line_time("Тихо.") > 1.0f && cs_line_time("Мені такі люди потрібні. Робота чиста, гроші — в доларах.") > 3.5f);

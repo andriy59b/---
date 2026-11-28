@@ -326,3 +326,138 @@ int view_cone_sphere(const ViewCone *c, V3 centre, float r)
     }
     return inside;
 }
+
+/* ------------------------------------------------------------ lit meshes */
+
+void lm_init(LMesh *m)
+{
+    m->v = NULL;
+    m->n = m->cap = 0;
+}
+
+void lm_free(LMesh *m)
+{
+    free(m->v);
+    lm_init(m);
+}
+
+int lm_reserve(LMesh *m, int extra)
+{
+    if (m->n + extra > m->cap) {
+        int cap = m->cap ? m->cap * 2 : 256;
+        LVertex *nv;
+        while (cap < m->n + extra) cap *= 2;
+        nv = (LVertex *)realloc(m->v, (size_t)cap * sizeof(LVertex));
+        if (!nv) return 0;
+        m->v = nv;
+        m->cap = cap;
+    }
+    return 1;
+}
+
+void lm_vertex(LMesh *m, const Xf *xf, V3 p, V3 n, float u, float v, unsigned int color)
+{
+    LVertex *g;
+    V3 w, wn;
+    if (!lm_reserve(m, 1)) return;
+    g = &m->v[m->n++];
+    w = xf ? xf_point(xf, p) : p;
+    wn = v3_norm(xf ? xf_dir(xf, n) : n);
+    g->u = u;
+    g->v = v;
+    g->color = color;
+    g->nx = wn.x;
+    g->ny = wn.y;
+    g->nz = wn.z;
+    g->x = w.x;
+    g->y = w.y;
+    g->z = w.z;
+}
+
+void lm_box(LMesh *m, const Xf *xf, V3 lo, V3 hi, const UVRect uvs[6], unsigned int color, int faces)
+{
+    static const V3 N[6] = { { 1, 0, 0 }, { -1, 0, 0 }, { 0, 1, 0 }, { 0, -1, 0 }, { 0, 0, 1 }, { 0, 0, -1 } };
+    int f;
+    for (f = 0; f < 6; f++) {
+        V3 p[4];
+        int i;
+        const UVRect *uv = &uvs[f];
+        if (!(faces & (1 << f))) continue;
+        for (i = 0; i < 4; i++) p[i] = corner(lo, hi, BOX_FACE[f][i]);
+        lm_vertex(m, xf, p[0], N[f], uv->u0, uv->v1, color);
+        lm_vertex(m, xf, p[1], N[f], uv->u0, uv->v0, color);
+        lm_vertex(m, xf, p[2], N[f], uv->u1, uv->v0, color);
+        lm_vertex(m, xf, p[0], N[f], uv->u0, uv->v1, color);
+        lm_vertex(m, xf, p[2], N[f], uv->u1, uv->v0, color);
+        lm_vertex(m, xf, p[3], N[f], uv->u1, uv->v1, color);
+    }
+}
+
+/* ------------------------------------------------------------- draw list */
+
+void dl_init(DrawList *d)
+{
+    d->items = NULL;
+    d->n = d->cap = d->verts = 0;
+}
+
+void dl_free(DrawList *d)
+{
+    free(d->items);
+    dl_init(d);
+}
+
+void dl_clear(DrawList *d)
+{
+    d->n = 0;
+    d->verts = 0;
+}
+
+static void dl_push(DrawList *d, const void *v, int n, int lit, const Xf *xf)
+{
+    DrawItem *it;
+    if (n <= 0) return;
+    if (d->n >= d->cap) {
+        int cap = d->cap ? d->cap * 2 : 256;
+        DrawItem *ni = (DrawItem *)realloc(d->items, (size_t)cap * sizeof(DrawItem));
+        if (!ni) return;
+        d->items = ni;
+        d->cap = cap;
+    }
+    it = &d->items[d->n++];
+    it->v = v;
+    it->n = n;
+    it->lit = lit;
+    it->xf = *xf;
+    d->verts += n;
+}
+
+void dl_add(DrawList *d, const GVertex *v, int n, const Xf *xf) { dl_push(d, v, n, 0, xf); }
+void dl_add_lit(DrawList *d, const LVertex *v, int n, const Xf *xf) { dl_push(d, v, n, 1, xf); }
+
+void dl_flatten(const DrawList *d, GMesh *out)
+{
+    int i, k;
+    for (i = 0; i < d->n; i++) {
+        const DrawItem *it = &d->items[i];
+        if (!gm_reserve(out, it->n)) return;
+        for (k = 0; k < it->n; k++) {
+            GVertex *g = &out->v[out->n++];
+            V3 p;
+            if (it->lit) {
+                const LVertex *l = &((const LVertex *)it->v)[k];
+                p = xf_point(&it->xf, v3(l->x, l->y, l->z));
+                g->u = l->u;
+                g->v = l->v;
+                g->color = gfx_shade(xf_dir(&it->xf, v3(l->nx, l->ny, l->nz)), l->color);
+            } else {
+                const GVertex *s = &((const GVertex *)it->v)[k];
+                p = xf_point(&it->xf, v3(s->x, s->y, s->z));
+                *g = *s;
+            }
+            g->x = p.x;
+            g->y = p.y;
+            g->z = p.z;
+        }
+    }
+}
