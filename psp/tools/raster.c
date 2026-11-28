@@ -244,6 +244,19 @@ void rs_draw(Raster *r, const GVertex *v, int n)
         PV in[3], out[4];
         int i, k = 0;
         for (i = 0; i < 3; i++) in[i] = to_view(r, &v[t + i]);
+        if (r->guard_cull) {
+            /* PSP screen is 480x272 centred in a 4096x4096 space */
+            float f = 1.0f / tanf(r->fov * 0.5f * PI_F / 180.0f), aspect = 480.0f / 272.0f;
+            int cull = 0;
+            for (i = 0; i < 3; i++) {
+                float w = -in[i].z;
+                if (w < r->near_z) continue;
+                if (fabsf(in[i].x * f / aspect / w * 240.0f) >= 2048.0f ||
+                    fabsf(in[i].y * f / w * 136.0f) >= 2048.0f)
+                    cull = 1;
+            }
+            if (cull) continue;
+        }
         /* clip against the near plane (z < nearz is visible) */
         for (i = 0; i < 3; i++) {
             PV a = in[i], b = in[(i + 1) % 3];

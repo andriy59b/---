@@ -16,6 +16,7 @@ enum {
 #define RIDE_EV_ENTERED 2   /* now driving */
 #define RIDE_EV_EXITED 4    /* back on foot */
 #define RIDE_EV_FLEE 8      /* the previous driver jumped out: see flee_pos */
+#define RIDE_EV_GAVE_UP 16  /* the car got away (or vanished) before we reached its door */
 
 typedef struct {
     int state, car, side;
@@ -26,6 +27,7 @@ typedef struct {
 
 void ride_reset(Ride *r);
 void ride_enter(Ride *r, Ped *p, int car, int side);
+void ride_cancel(Ride *r, Ped *p);        /* stop walking/running to the car */
 int  ride_exit(Ride *r, Ped *p);          /* 0 if the car is still moving */
 void ride_force_out(Ride *r, Ped *p);     /* instant, for cutscenes */
 int  ride_update(Ride *r, Ped *p, float dt);

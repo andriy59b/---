@@ -158,3 +158,115 @@ void gm_append_xf(GMesh *dst, const GMesh *src, const Xf *xf)
         dst->v[dst->n++] = g;
     }
 }
+
+/* ------------------------------------------------------------ view cone */
+
+void view_cone(ViewCone *c, V3 eye, float yaw, float pitch, float k)
+{
+    float cy = cosf(yaw), sy = sinf(yaw), cp = cosf(pitch), sp = sinf(pitch);
+    c->eye = eye;
+    c->fwd = v3(-sy * cp, sp, -cy * cp);
+    c->right = v3(cy, 0.0f, -sy);
+    c->up = v3(sy * sp, cp, cy * sp);
+    c->k = k;
+}
+
+/* the four side planes: k*d - x, k*d + x, k*d - y, k*d + y (inside >= 0) */
+static void cone_dist(const ViewCone *c, V3 p, float out[4])
+{
+    V3 r = v3_sub(p, c->eye);
+    float d = v3_dot(r, c->fwd) * c->k, x = v3_dot(r, c->right), y = v3_dot(r, c->up);
+    out[0] = d - x;
+    out[1] = d + x;
+    out[2] = d - y;
+    out[3] = d + y;
+}
+
+int view_cone_contains(const ViewCone *c, V3 lo, V3 hi)
+{
+    int i, k;
+    for (i = 0; i < 8; i++) {
+        float e[4];
+        cone_dist(c, v3(i & 1 ? hi.x : lo.x, i & 2 ? hi.y : lo.y, i & 4 ? hi.z : lo.z), e);
+        for (k = 0; k < 4; k++)
+            if (e[k] < 0.0f) return 0;
+    }
+    return 1;
+}
+
+static GVertex lerp_vertex(const GVertex *a, const GVertex *b, float t)
+{
+    GVertex g;
+    int s;
+    g.u = a->u + (b->u - a->u) * t;
+    g.v = a->v + (b->v - a->v) * t;
+    g.x = a->x + (b->x - a->x) * t;
+    g.y = a->y + (b->y - a->y) * t;
+    g.z = a->z + (b->z - a->z) * t;
+    g.color = 0;
+    for (s = 0; s < 32; s += 8) {
+        float ca = (float)((a->color >> s) & 0xFF), cb = (float)((b->color >> s) & 0xFF);
+        g.color |= (unsigned int)(ca + (cb - ca) * t + 0.5f) << s;
+    }
+    return g;
+}
+
+int gm_cone_clip(const GVertex *v, int n, const ViewCone *c, GVertex *out, int cap)
+{
+    int t, count = 0;
+    for (t = 0; t + 2 < n; t += 3) {
+        float e[3][4];
+        int i, k, inside = 1;
+        for (i = 0; i < 3; i++) {
+            cone_dist(c, v3(v[t + i].x, v[t + i].y, v[t + i].z), e[i]);
+            for (k = 0; k < 4; k++)
+                if (e[i][k] < 0.0f) inside = 0;
+        }
+        if (inside) {
+            if (count + 3 > cap) return -1;
+            out[count++] = v[t];
+            out[count++] = v[t + 1];
+            out[count++] = v[t + 2];
+            continue;
+        }
+        {
+            /* Sutherland-Hodgman against the four planes */
+            GVertex poly[2][8];
+            float dist[2][8][4];
+            int np = 3, cur = 0, pl;
+            for (i = 0; i < 3; i++) {
+                poly[0][i] = v[t + i];
+                for (k = 0; k < 4; k++) dist[0][i][k] = e[i][k];
+            }
+            for (pl = 0; pl < 4 && np >= 3; pl++) {
+                int nn = 0, nx = cur ^ 1;
+                for (i = 0; i < np; i++) {
+                    int j = (i + 1) % np;
+                    float da = dist[cur][i][pl], db = dist[cur][j][pl];
+                    if (da >= 0.0f) {
+                        poly[nx][nn] = poly[cur][i];
+                        for (k = 0; k < 4; k++) dist[nx][nn][k] = dist[cur][i][k];
+                        nn++;
+                    }
+                    if ((da >= 0.0f) != (db >= 0.0f) && nn < 8) {
+                        float s = da / (da - db);
+                        poly[nx][nn] = lerp_vertex(&poly[cur][i], &poly[cur][j], s);
+                        for (k = 0; k < 4; k++)
+                            dist[nx][nn][k] = dist[cur][i][k] + (dist[cur][j][k] - dist[cur][i][k]) * s;
+                        nn++;
+                    }
+                }
+                np = nn;
+                cur = nx;
+            }
+            if (np < 3) continue;
+            if (count + (np - 2) * 3 > cap) return -1;
+            for (i = 1; i + 1 < np; i++) {
+                out[count++] = poly[cur][0];
+                out[count++] = poly[cur][i];
+                out[count++] = poly[cur][i + 1];
+            }
+        }
+    }
+    return count;
+}

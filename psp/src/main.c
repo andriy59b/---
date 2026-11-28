@@ -356,6 +356,7 @@ static void ride_tick(float dt)
         show_banner("Водій утік!", NULL, 2.0f);
     }
     if (ev & RIDE_EV_ENTERED) radio_play();
+    if (ev & RIDE_EV_GAVE_UP) show_banner("Не наздогнав.", NULL, 1.5f);
 }
 
 /* ----------------------------------------------------------------- story */
@@ -664,12 +665,15 @@ int main(void)
                 }
             } else if (pstate == P_DRIVE) {
                 player_drive_tick(dt, buttons, pressed, &pad);
+            } else if (pstate == RIDE_WALK && (pressed & PSP_CTRL_TRIANGLE)) {
+                ride_cancel(&ride, player); /* changed our mind */
             } else {
                 ride_tick(dt);
             }
 
             focus = car_idx >= 0 ? cars[car_idx].pos : player->pos;
-            ev = cars_update(dt, focus, pstate == P_FOOT ? &player->pos : NULL, 1);
+            /* traffic also stops for us while we run after a car */
+            ev = cars_update(dt, focus, (pstate == P_FOOT || pstate == RIDE_WALK) ? &player->pos : NULL, 1);
             if (ev & CAR_EV_HONK) synth_sfx(SFX_HORN);
             if ((ev & CAR_EV_CRASH) && car_idx < 0) synth_sfx(SFX_CRASH);
 

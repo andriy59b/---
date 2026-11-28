@@ -21,6 +21,9 @@ typedef struct {
     int filter;          /* RS_FILTER_* used when minified */
     float lod_bias;
     float near_z;        /* near clip distance (default 0.1) */
+    int guard_cull;      /* 1: drop triangles like the PSP GE does when a vertex in
+                            front of the camera lands outside the 4096x4096
+                            drawing area (PPSSPP emulates this too) */
 } Raster;
 
 enum { RS_NEAREST = 0, RS_LINEAR_MIPMAP_LINEAR, RS_NEAREST_MIPMAP_LINEAR, RS_NEAREST_MIPMAP_NEAREST };

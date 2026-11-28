@@ -380,6 +380,57 @@ static void test_ride(void)
     all = 0;
     for (i = 0; i < 600 && r.state != RIDE_DRIVE; i++) all |= ride_update(&r, &p, 1.0f / 60);
     CHECK(all & RIDE_EV_FLEE);
+
+    /* a car that keeps driving has to be caught: running after it never
+     * teleports into it, and the chase ends when it gets away */
+    {
+        V3 prev;
+        float jump = 0.0f, closest = 1e9f;
+        cars_clear();
+        k = car_spawn(CK_TRAFFIC, CAR_KLASYKA, v3(400, 0, -300), 0.0f, 0xFFFFFFFFu);
+        cars[k].vel = v3_scale(yaw_fwd(cars[k].yaw), 6.0f);
+        ped_init(&p, CH_ANDRIY, car_local(&cars[k], v3(-2.0f, 0, 1.0f)), 0.0f);
+        ride_reset(&r);
+        ride_enter(&r, &p, k, 0);
+        all = 0;
+        prev = p.pos;
+        for (i = 0; i < 60 * 20 && r.state != RIDE_FOOT; i++) {
+            V3 d;
+            cars[k].in_throttle = 0.6f;
+            cars[k].in_steer = 0.0f;
+            cars[k].in_handbrake = 0;
+            car_step(&cars[k], 1.0f / 60);
+            all |= ride_update(&r, &p, 1.0f / 60);
+            d = v3_sub(p.pos, prev);
+            jump = fmaxf(jump, sqrtf(d.x * d.x + d.z * d.z));
+            closest = fminf(closest, v3_len(v3_sub(p.pos, car_door_point(&cars[k], 0))));
+            prev = p.pos;
+            CHECK(r.state == RIDE_WALK || r.state == RIDE_FOOT);
+        }
+        CHECK(r.state == RIDE_FOOT && (all & RIDE_EV_GAVE_UP) && !(all & RIDE_EV_FLEE));
+        CHECK(jump < 0.2f);            /* ran, never jumped */
+        CHECK(cars[k].kind == CK_TRAFFIC);
+        printf("chase: gave up after %.1f s, closest %.2f m\n", i / 60.0f, closest);
+
+        /* the same car stopped (at a crossing, or for us): now it can be taken */
+        cars_clear();
+        k = car_spawn(CK_TRAFFIC, CAR_KLASYKA, v3(400, 0, -300), 0.0f, 0xFFFFFFFFu);
+        ped_init(&p, CH_ANDRIY, car_local(&cars[k], v3(-2.0f, 0, 4.0f)), 0.0f);
+        ride_reset(&r);
+        ride_enter(&r, &p, k, 0);
+        all = 0;
+        jump = 0.0f;
+        prev = p.pos;
+        for (i = 0; i < 600 && r.state != RIDE_DRIVE; i++) {
+            V3 d;
+            all |= ride_update(&r, &p, 1.0f / 60);
+            d = v3_sub(p.pos, prev);
+            if (p.active) jump = fmaxf(jump, sqrtf(d.x * d.x + d.z * d.z));
+            prev = p.pos;
+        }
+        CHECK(r.state == RIDE_DRIVE && (all & RIDE_EV_FLEE));
+        CHECK(jump < 0.2f);
+    }
 }
 
 static void test_cutscenes_and_story(void)

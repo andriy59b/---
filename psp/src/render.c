@@ -31,6 +31,15 @@ typedef struct { unsigned int color; float x, y, z; } CVertex;
 static unsigned int __attribute__((aligned(16))) gu_list[512 * 1024];
 #define MIP_LEVELS 4   /* 512, 256, 128, 64 */
 #define TEX_LOD_BIAS (-0.5f)
+
+/* Triangles of the cells around the camera are cut to a cone 6x wider than
+ * the view (see gm_cone_clip): the screen limit for the GE is about 9x. */
+#define GUARD_K 6.0f
+#define CLIP_CAP 48000
+static GVertex *clip_buf;
+static int clip_used;
+static ViewCone cam_cone;
+
 static unsigned int *atlas_mip[MIP_LEVELS];
 static unsigned int *font_tex;
 static int bound_tex;
@@ -104,6 +113,19 @@ static void draw_verts(const GVertex *v, int n)
     }
 }
 
+/* draws n vertices, cut to the cone first if any reach outside it */
+static void draw_clipped(const GVertex *v, int n)
+{
+    int m = clip_buf ? gm_cone_clip(v, n, &cam_cone, clip_buf + clip_used, CLIP_CAP - clip_used) : -1;
+    if (m < 0) {
+        draw_verts(v, n);
+    } else if (m > 0) {
+        sceKernelDcacheWritebackRange(clip_buf + clip_used, (unsigned int)(m * sizeof(GVertex)));
+        draw_verts(clip_buf + clip_used, m);
+        clip_used += m;
+    }
+}
+
 /* ------------------------------------------------------------------- init */
 
 void r_init(void)
@@ -127,6 +149,8 @@ void r_init(void)
         free(half);
     }
     free(linear);
+
+    clip_buf = (GVertex *)memalign(16, CLIP_CAP * sizeof(GVertex));
 
     font_tex = (unsigned int *)memalign(16, FONT_TEX_W * FONT_TEX_H * 4);
     font_generate(font_tex);
@@ -166,6 +190,7 @@ void r_begin_frame(unsigned int clear)
 {
     sceGuStart(GU_DIRECT, gu_list);
     bound_tex = 0;
+    clip_used = 0;
     sceGuDepthMask(GU_FALSE);
     sceGuClearColor(clear);
     sceGuClearDepth(0);
@@ -199,6 +224,7 @@ void r_camera(V3 eye, float yaw, float pitch, float fov)
     ScePspFVector3 t;
     cam_eye = eye;
     cam_fov = fov;
+    view_cone(&cam_cone, eye, yaw, pitch, GUARD_K);
     projection(1.0f);
     sceGumMatrixMode(GU_VIEW);
     sceGumLoadIdentity();
@@ -313,7 +339,11 @@ void r_city(V3 eye, float yaw, float pitch, float radius, const SkyState *s)
         for (i = CELL_MIN; i < CELL_MIN + CELLS; i++) {
             CityCell *c = city_cell(i, j);
             if (!c->solid.n || !cell_visible(c, eye, fx, fz, pitch, radius)) continue;
-            draw_verts(c->solid.v, c->solid.n);
+            if (view_cone_contains(&cam_cone, v3(c->cx - LOT * 0.5f, -1.0f, c->cz - LOT * 0.5f),
+                                   v3(c->cx + LOT * 0.5f, 60.0f, c->cz + LOT * 0.5f)))
+                draw_verts(c->solid.v, c->solid.n);
+            else
+                draw_clipped(c->solid.v, c->solid.n); /* near the camera */
         }
     sceGuDisable(GU_FOG);
 }
@@ -357,7 +387,7 @@ void r_mesh(const GMesh *m, const SkyState *s)
     sceGuFog(s->fog_start, s->fog_end, s->fog);
     sceGumMatrixMode(GU_MODEL);
     sceGumLoadIdentity();
-    draw_verts(m->v, m->n);
+    draw_clipped(m->v, m->n);
     sceGuDisable(GU_FOG);
 }
 

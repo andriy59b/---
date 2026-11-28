@@ -55,4 +55,21 @@ void gm_box_xf(GMesh *m, const Xf *xf, V3 lo, V3 hi, const UVRect uvs[6], unsign
 /* Appends src transformed by xf (positions only, colours kept). */
 void gm_append_xf(GMesh *dst, const GMesh *src, const Xf *xf);
 
+/* The PSP GE drops a whole triangle when a vertex in front of the camera
+ * projects outside its 4096x4096 drawing area (PPSSPP emulates this): big
+ * ground quads next to the camera vanish and the sky shows through. The fix
+ * is to cut such triangles on the CPU to a cone a few times wider than the
+ * screen (|x|, |y| <= k * depth), which keeps every vertex inside. */
+typedef struct {
+    V3 eye, right, up, fwd;
+    float k;
+} ViewCone;
+
+void view_cone(ViewCone *c, V3 eye, float yaw, float pitch, float k);
+/* 1 if every point of the box is inside the cone (draw it as it is) */
+int  view_cone_contains(const ViewCone *c, V3 lo, V3 hi);
+/* Copies triangles to out, cutting the ones that reach outside the cone.
+ * Returns the number of vertices written, or -1 if out is too small. */
+int  gm_cone_clip(const GVertex *v, int n, const ViewCone *c, GVertex *out, int cap);
+
 #endif
