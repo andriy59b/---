@@ -72,6 +72,7 @@ typedef struct {
     float punch;        /* 0..1 arm extension of the current punch */
     int punch_arm;      /* 0 left, 1 right */
     float hurt;         /* 0..1 flinch after a blow */
+    float ride;         /* 0..1 astride a motorcycle */
 } AnimState;
 
 typedef struct {

@@ -734,17 +734,6 @@ static void t_field(int sunflower)
     }
 }
 
-static void t_hills(void)
-{
-    int x, y;
-    rect(0, 0, 63, 63, CA(0, 0, 0, 0));
-    for (x = 0; x < 64; x++) {
-        int h = 30 + (int)(10 * sinf(x * 0.098f) + 6 * sinf(x * 0.29f + 1.0f));
-        for (y = h; y < 64; y++) px(x, y, mul(C(96, 120, 92), 0.85f + 0.15f * (y - h) / 30.0f));
-        if (rn(93, x, 0) > 0.55f)
-            for (y = h - 4 - (int)(rn(94, x, 0) * 5); y < h; y++) px(x, y, C(70, 96, 70));
-    }
-}
 
 static void t_window_lit(void)
 {
@@ -801,6 +790,159 @@ static void t_car_parts(void)
     for (y = 48; y < 54; y++)                    /* bumper */
         for (x = 0; x < 64; x++) px(x, y, mul(C(60, 60, 62), y == 48 ? 1.6f : 1.0f));
     rect(32, 40, 39, 47, C(20, 20, 22));
+    for (y = 34; y < 40; y++)                    /* chrome strip */
+        for (x = 48; x < 64; x++) px(x, y, mul(C(225, 228, 232), 1.0f - (y - 34) * 0.08f));
+    grain(40, 40, 47, 47, C(34, 34, 36), 0.15f, 130, 0);  /* textured black plastic */
+}
+
+static void wheel_rim(int cx0, int cy0, int kind)
+{
+    int x, y;
+    float c = cx0 + 7.5f, d = cy0 + 7.5f;
+    for (y = cy0; y < cy0 + 16; y++)
+        for (x = cx0; x < cx0 + 16; x++) {
+            float dx = x - c, dy = y - d, r = sqrtf(dx * dx + dy * dy), a = atan2f(dy, dx);
+            unsigned int col = C(28, 28, 30);
+            if (kind == 0) {          /* alloy: cross spokes, polished lip */
+                col = r > 6.6f ? C(200, 204, 210) : ((int)((a + 3.1416f) * 8.0f / 3.1416f + 0.5f) % 2 ? C(150, 154, 160) : C(60, 62, 66));
+                if (r < 2.2f) col = C(120, 124, 130);
+            } else if (kind == 1) {   /* steel wheel with a domed hub cap */
+                col = r > 5.0f ? C(110, 112, 116) : C(196, 198, 202);
+                if (r > 5.6f && r < 6.4f && ((int)((a + 3.1416f) * 4.0f / 3.1416f) & 1)) col = C(40, 40, 42);
+                if (r < 1.5f) col = C(90, 90, 94);
+            } else if (kind == 2) {   /* truck: deep dish, nuts */
+                col = r > 6.0f ? C(70, 72, 60) : C(96, 98, 84);
+                if (r > 2.5f && r < 3.6f && ((int)((a + 3.1416f) * 5.0f / 3.1416f + 0.5f) & 1)) col = C(40, 40, 36);
+                if (r < 2.0f) col = C(60, 60, 54);
+            } else {                  /* wire spokes */
+                col = r > 6.4f ? C(200, 204, 210) : CA(0, 0, 0, 0);
+                if (r < 6.4f && (fabsf(fmodf(a * 18.0f / 3.1416f + 40.0f, 2.0f) - 1.0f) < 0.25f)) col = C(180, 184, 190);
+                if (r < 1.8f) col = C(150, 152, 156);
+            }
+            if (r > 7.6f) col = CA(0, 0, 0, 0);
+            px(x, y, col);
+        }
+}
+
+/* grilles, lights, rims, canvas, beacons, the motorcycle tank */
+static void t_car_parts2(void)
+{
+    int x, y, k;
+    rect(0, 0, 63, 63, C(30, 30, 32));
+    /* twin kidneys: chrome frames, black vertical slats */
+    rect(0, 0, 31, 11, C(26, 26, 28));
+    for (k = 0; k < 2; k++) {
+        int x0 = 3 + k * 14, x1 = x0 + 11;
+        rect(x0, 1, x1, 10, C(210, 214, 220));
+        rect(x0 + 1, 2, x1 - 1, 9, C(18, 18, 20));
+        for (x = x0 + 2; x < x1 - 1; x += 2) rect(x, 2, x, 9, C(70, 72, 76));
+    }
+    /* seven slots in a body-coloured frame (light grey: tinted with chrome feel) */
+    rect(32, 0, 63, 11, C(196, 198, 204));
+    for (k = 0; k < 7; k++) rect(34 + k * 4, 2, 35 + k * 4, 9, C(16, 16, 18));
+    /* tall slats in a painted (light) panel */
+    rect(0, 12, 31, 23, C(170, 172, 168));
+    for (x = 2; x < 30; x += 3) rect(x, 13, x + 1, 22, C(24, 24, 24));
+    /* chrome horizontal bars */
+    for (y = 12; y < 20; y++)
+        for (x = 32; x < 64; x++) px(x, y, (y & 1) ? C(220, 224, 230) : C(40, 40, 44));
+    /* truck grille: heavy vertical bars on black */
+    rect(32, 20, 63, 31, C(20, 20, 20));
+    for (x = 33; x < 63; x += 4) rect(x, 21, x + 1, 30, C(150, 30, 30));
+    /* four round headlights in a black band */
+    rect(0, 24, 31, 31, C(14, 14, 16));
+    for (k = 0; k < 4; k++) {
+        float cx = 3.5f + k * 8.0f + (k >= 2 ? 1.0f : 0.0f);
+        disc(cx, 27.5f, 3.4f, C(200, 204, 210));
+        disc(cx, 27.5f, 2.5f, C(246, 248, 240));
+    }
+    wheel_rim(0, 32, 0);
+    wheel_rim(16, 32, 1);
+    wheel_rim(32, 32, 2);
+    wheel_rim(48, 32, 3);
+    /* canvas: woven, with a seam */
+    grain(0, 48, 15, 63, C(200, 200, 190), 0.25f, 131, 4);
+    for (y = 48; y < 64; y++)
+        for (x = 0; x < 16; x++)
+            if (((x + y) & 3) == 0) px(x, y, mul(getpx(x, y), 0.85f));
+    rect(0, 55, 15, 55, C(150, 150, 140));
+    /* beacons: lens with a bright core */
+    for (k = 0; k < 2; k++)
+        for (y = 0; y < 8; y++)
+            for (x = 0; x < 16; x++) {
+                float b = 1.0f - fabsf(x - 7.5f) / 9.0f - fabsf(y - 3.5f) / 8.0f;
+                px(16 + x, 48 + k * 8 + y, k ? C((int)(120 + 135 * b), (int)(20 + 60 * b), 20) : C(20, (int)(60 + 80 * b), (int)(140 + 115 * b)));
+            }
+    /* motorcycle tank: paint with a chrome flash */
+    for (y = 48; y < 64; y++)
+        for (x = 32; x < 48; x++) px(x, y, (x - y > -19 && x - y < -14) ? C(230, 232, 236) : C(255, 255, 255));
+    /* wedge headlight */
+    rect(48, 48, 63, 55, C(170, 176, 186));
+    for (x = 49; x < 63; x++)
+        for (y = 49; y < 55; y++) px(x, y, (y - 49) * 3 > (x - 49) ? C(246, 248, 242) : C(200, 206, 214));
+    /* mirror glass */
+    for (y = 56; y < 64; y++)
+        for (x = 48; x < 64; x++) px(x, y, blend(C(150, 170, 190), C(60, 70, 90), (y - 56) / 8.0f));
+}
+
+/* police, taxi, ambulance and fire markings */
+static void t_livery(void)
+{
+    int x, y;
+    rect(0, 0, 63, 63, C(240, 240, 240));
+    rect(0, 0, 63, 11, C(30, 60, 170));                       /* МІЛІЦІЯ */
+    text(32 - text_w("МІЛІЦІЯ") / 2, 2, "МІЛІЦІЯ", C(250, 250, 250));
+    for (y = 12; y < 20; y++)                                  /* checker band */
+        for (x = 0; x < 64; x++) px(x, y, (((x >> 2) + ((y - 12) >> 2)) & 1) ? C(20, 20, 20) : C(240, 240, 240));
+    rect(0, 20, 63, 31, C(250, 200, 40));                     /* ТАКСІ */
+    frame(0, 20, 63, 31, C(30, 30, 30));
+    text(32 - text_w("ТАКСІ") / 2, 22, "ТАКСІ", C(20, 20, 20));
+    rect(0, 32, 63, 43, C(244, 244, 244));                    /* ШВИДКА */
+    rect(0, 32, 63, 33, C(200, 30, 30));
+    rect(0, 42, 63, 43, C(200, 30, 30));
+    text(32 - text_w("ШВИДКА") / 2, 34, "ШВИДКА", C(200, 30, 30));
+    rect(0, 44, 15, 59, C(246, 246, 246));                    /* red cross */
+    rect(6, 46, 9, 57, C(210, 30, 30));
+    rect(2, 50, 13, 53, C(210, 30, 30));
+    rect(16, 44, 63, 53, C(200, 30, 30));                     /* ПОЖЕЖНА */
+    text(40 - text_w("ПОЖЕЖНА") / 2, 45, "ПОЖЕЖНА", C(250, 250, 250));
+    rect(16, 54, 39, 63, C(246, 246, 246));                   /* 03 */
+    text(28 - text_w("03") / 2, 55, "03", C(210, 30, 30));
+    rect(40, 54, 63, 63, C(200, 30, 30));                     /* 01 */
+    text(52 - text_w("01") / 2, 55, "01", C(250, 250, 250));
+}
+
+/* instrument cluster, console, upholstery, door card, carpet, wood */
+static void t_car_interior(void)
+{
+    int x, y, k;
+    rect(0, 0, 31, 15, C(26, 26, 28));                        /* cluster: three dials */
+    for (k = 0; k < 3; k++) {
+        float cx = 5.5f + k * 10.0f;
+        disc(cx, 8.0f, 4.6f, C(80, 80, 84));
+        disc(cx, 8.0f, 3.8f, C(18, 18, 20));
+        line((int)cx, 8, (int)cx + (k == 1 ? 3 : -2), k == 1 ? 5 : 6, C(240, 120, 40));
+        px((int)cx - 3, 8, C(200, 200, 200));
+        px((int)cx + 3, 8, C(200, 200, 200));
+    }
+    rect(1, 13, 30, 13, C(60, 160, 60));
+    rect(32, 0, 63, 15, C(34, 34, 36));                       /* console: radio, heater sliders */
+    rect(34, 2, 61, 6, C(14, 14, 14));
+    rect(36, 3, 47, 5, C(60, 190, 120));
+    for (x = 50; x < 60; x += 3) rect(x, 3, x + 1, 5, C(150, 150, 150));
+    for (k = 0; k < 3; k++) rect(36 + k * 8, 9, 40 + k * 8, 13, C(60, 60, 64));
+    grain(0, 16, 15, 31, C(200, 200, 200), 0.3f, 132, 2);    /* velour */
+    for (y = 16; y < 32; y++)                                  /* leather: panels and seams */
+        for (x = 16; x < 32; x++) px(x, y, ((y - 16) % 5 == 4) ? C(170, 170, 170) : mul(C(230, 230, 230), 0.92f + 0.08f * rn(133, x, y)));
+    for (y = 16; y < 32; y++)                                  /* vinyl: pleats */
+        for (x = 32; x < 48; x++) px(x, y, (x % 4 == 0) ? C(150, 150, 150) : C(220, 220, 220));
+    grain(48, 16, 63, 31, C(200, 200, 200), 0.15f, 134, 2);  /* door card: armrest, handle, pocket */
+    rect(48, 22, 63, 24, C(150, 150, 150));
+    rect(56, 18, 59, 19, C(240, 240, 240));
+    rect(49, 27, 62, 30, C(120, 120, 120));
+    grain(0, 32, 15, 47, C(70, 66, 62), 0.4f, 135, 1);        /* carpet */
+    for (y = 32; y < 48; y++)                                  /* wood */
+        for (x = 16; x < 32; x++) px(x, y, mul(C(150, 90, 50), 0.8f + 0.25f * sinf(y * 0.9f + sinf(x * 0.4f) * 1.5f)));
 }
 
 static void t_tire(void)
@@ -835,25 +977,7 @@ static void t_car_glass(void)
     frame(0, 0, 63, 63, C(20, 20, 20));
 }
 
-static void t_bus_side(void)
-{
-    int x, y;
-    grain(0, 0, 63, 63, C(230, 200, 80), 0.08f, 96, 4);
-    for (x = 2; x < 64; x += 16) {
-        rect(x, 6, x + 13, 30, C(40, 50, 60));
-        for (y = 7; y < 30; y++) if (y - (x % 9) > 10 && y - (x % 9) < 14) px(x + 4, y, C(150, 170, 190));
-    }
-    rect(0, 36, 63, 40, C(200, 60, 40));
-}
 
-static void t_lamp(void)
-{
-    rect(0, 0, 63, 63, CA(0, 0, 0, 0));
-    rect(28, 8, 35, 63, C(160, 158, 152));
-    rect(30, 8, 31, 63, C(190, 188, 182));
-    rect(24, 4, 51, 9, C(80, 80, 84));
-    rect(42, 9, 51, 12, C(240, 236, 200));
-}
 
 static void t_bench(void)
 {
@@ -1189,7 +1313,7 @@ void texgen_atlas(unsigned int *atlas)
         case T_SUNFLOWERS: t_sunflowers(); break;
         case T_FIELD_WHEAT: t_field(0); break;
         case T_FIELD_SUNFLOWER: t_field(1); break;
-        case T_HILLS: t_hills(); break;
+        case T_CAR_PARTS2: t_car_parts2(); break;
         case T_WINDOW_LIT: t_window_lit(); break;
         case T_CAR_SIDE: t_car_side(); break;
         case T_CAR_PARTS: t_car_parts(); break;
@@ -1209,8 +1333,8 @@ void texgen_atlas(unsigned int *atlas)
         case T_FACES_D: t_faces_quad(FACE_NADIA); break;
         case T_FACES_E: t_faces_quad(FACE_STEPAN); break;
         case T_CLOTH_KNIT: t_cloth_knit(); break;
-        case T_BUS_SIDE: t_bus_side(); break;
-        case T_LAMP: t_lamp(); break;
+        case T_LIVERY: t_livery(); break;
+        case T_CAR_INTERIOR: t_car_interior(); break;
         case T_BENCH: t_bench(); break;
         case T_SHADOW: t_shadow(); break;
         case T_FLARE: t_flare(); break;

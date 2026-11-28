@@ -261,6 +261,26 @@ void anim_pose(const AnimState *a, Pose *o)
         sit_pose(&extra);
         blend_pose(o, &extra, a->sit);
     }
+    if (a->ride > 0.0f) {
+        /* astride: knees apart, feet on the pegs, leaning on the bars */
+        memset(&extra, 0, sizeof(extra));
+        extra.pelvis_y = -0.36f;
+        set(&extra, B_THIGH_L, 1.15f, 0.1f, -0.22f);
+        set(&extra, B_THIGH_R, 1.15f, -0.1f, 0.22f);
+        set(&extra, B_SHIN_L, -1.25f, 0.0f, 0.08f);
+        set(&extra, B_SHIN_R, -1.25f, 0.0f, -0.08f);
+        set(&extra, B_FOOT_L, 0.25f, 0.0f, 0.0f);
+        set(&extra, B_FOOT_R, 0.25f, 0.0f, 0.0f);
+        set(&extra, B_SPINE, -0.32f, 0.0f, 0.0f);
+        set(&extra, B_HEAD, 0.22f, 0.0f, 0.0f);
+        set(&extra, B_UARM_L, 1.05f, 0.25f, -0.12f);
+        set(&extra, B_UARM_R, 1.05f, -0.25f, 0.12f);
+        set(&extra, B_FARM_L, 0.45f, 0.0f, 0.0f);
+        set(&extra, B_FARM_R, 0.45f, 0.0f, 0.0f);
+        set(&extra, B_HAND_L, -0.2f, 0.0f, 0.0f);
+        set(&extra, B_HAND_R, -0.2f, 0.0f, 0.0f);
+        blend_pose(o, &extra, a->ride);
+    }
     /* talking: nods and a living upper body; gestures on the arms */
     if (a->talk > 0.0f) {
         o->rx[B_HEAD] += a->talk * (0.05f * sinf(a->t * 7.0f) + 0.03f * sinf(a->t * 3.1f));

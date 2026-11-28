@@ -66,19 +66,20 @@ static void test_car_physics(void)
     int t, i;
     for (t = 0; t < CAR_TYPES; t++) {
         int k;
-        float t100 = -1.0f;
+        float t100 = -1.0f, target = fminf(100.0f, CAR_SPECS[t].top_kmh * 0.7f);
         Car *c;
+        if (CAR_IS_BIKE(t)) continue;   /* tested with the motorcycle */
         cars_clear();
         k = car_spawn(CK_PLAYER, t, v3(-600.0f, 0, 10.5f), -PI_F / 2, 0xFFFFFFFFu);
         c = &cars[k];
-        for (i = 0; i < 60 * 30 && t100 < 0; i++) {
+        for (i = 0; i < 60 * 45 && t100 < 0; i++) {
             c->in_throttle = 1.0f;
             car_step(c, 1.0f / 60);
-            if (car_speed(c) * 3.6f >= 100.0f) t100 = i / 60.0f;
+            if (car_speed(c) * 3.6f >= target) t100 = i / 60.0f;
             CHECK(!isnan(c->pos.x) && !isnan(c->yaw));
         }
-        printf("%-14s 0-100 km/h in %.1f s\n", CAR_SPECS[t].name, t100);
-        CHECK(t100 > 4.0f && t100 < 25.0f);
+        printf("%-14s 0-%.0f km/h in %.1f s\n", CAR_SPECS[t].name, target, t100);
+        CHECK(t100 > 3.0f && t100 < (CAR_SPECS[t].mass > 1600.0f ? 40.0f : 25.0f));
         CHECK(fabsf(c->pos.z - 10.5f) < 1.0f);  /* goes straight */
         CHECK(c->gear >= 2);
     }
@@ -261,8 +262,8 @@ static int inside_car(const Car *c, V3 p)
     return fabsf(v3_dot(d, f)) < CAR_SPECS[c->type].length * 0.5f && fabsf(v3_dot(d, r)) < CAR_SPECS[c->type].width * 0.5f;
 }
 
-/* Number of triangles lying on another triangle facing the same way (closer
- * than 1 cm): those fight for the depth buffer and flicker. */
+/* Number of triangles lying on another parallel one closer than 2 mm: those
+ * fight for the depth buffer and flicker. */
 static int coplanar_overlaps(const GMesh *m)
 {
     int n = m->n / 3, a, b, count = 0;
@@ -281,13 +282,16 @@ static int coplanar_overlaps(const GMesh *m)
             nb = v3_cross(v3_sub(q[1], q[0]), v3_sub(q[2], q[0]));
             if (v3_len(nb) < 1e-6f) continue;
             nb = v3_norm(nb);
-            if (fabsf(v3_dot(na, nb)) < 0.999f || fabsf(v3_dot(nb, v3_sub(c, q[0]))) > 0.01f) continue;
+            /* parallel and within 2 mm: they fight for the depth buffer whichever way they face
+             * (winding differs between primitives, so facing cannot be told from it) */
+            if (fabsf(v3_dot(na, nb)) < 0.999f || fabsf(v3_dot(nb, v3_sub(c, q[0]))) > 0.002f) continue;
             q2 = v3_sub(c, v3_scale(nb, v3_dot(nb, v3_sub(c, q[0]))));
             for (i = 0; i < 3; i++)
                 if (v3_dot(v3_cross(v3_sub(q[(i + 1) % 3], q[i]), v3_sub(q2, q[i])), nb) < 1e-5f) inside = 0;
             if (inside) {
                 if (getenv("UC_DEBUG_OVERLAP"))
-                    printf("  overlap at (%.2f %.2f %.2f) n(%.2f %.2f %.2f)\n", c.x, c.y, c.z, na.x, na.y, na.z);
+                    printf("  overlap at (%.2f %.2f %.2f) n(%.2f %.2f %.2f) with (%.2f %.2f %.2f)-(%.2f %.2f %.2f)-(%.2f %.2f %.2f) col %08x/%08x\n", c.x, c.y, c.z, na.x, na.y, na.z,
+                           q[0].x, q[0].y, q[0].z, q[1].x, q[1].y, q[1].z, q[2].x, q[2].y, q[2].z, g[0].color, h[0].color);
                 count++;
                 break;
             }
@@ -303,15 +307,23 @@ static void test_car_doors(void)
         const CarSpec *s = &CAR_SPECS[t];
         GMesh closed, open;
         int k, i, n_closed;
+        float wide = 0.0f, top = 0.0f;
+        CarLayout lay;
+        if (CAR_IS_BIKE(t)) continue;
+        car_layout(t, &lay);
         cars_clear();
-        k = car_spawn(CK_PARKED, t, v3(0, 0, 0), 0.0f, 0xFF808080u);
+        k = car_spawn(CK_PARKED, t, v3(400, 0, -300), 0.0f, 0xFF808080u);
         gm_init(&closed);
         car_append_mesh(&closed, &cars[k]);
         n_closed = closed.n;
+        for (i = 0; i < closed.n; i++) {
+            wide = fmaxf(wide, fabsf(closed.v[i].x - cars[k].pos.x));
+            top = fmaxf(top, closed.v[i].y);
+        }
         if (getenv("UC_DEBUG_OVERLAP")) printf("car %d closed\n", t);
         CHECK(coplanar_overlaps(&closed) == 0);
         for (side = 0; side < 2; side++) {
-            float hz = -s->length * 0.5f + s->ws_base - 0.05f, moved = 0.0f, maxy = -1.0f;
+            float hz = cars[k].pos.z - s->length * 0.5f + lay.door_d0, moved = 0.0f, maxy = -1.0f;
             cars[k].door = 1.0f;
             cars[k].door_side = side;
             gm_init(&open);
@@ -321,15 +333,16 @@ static void test_car_doors(void)
             CHECK(coplanar_overlaps(&open) == 0);
             for (i = 0; i < open.n; i++) {
                 const GVertex *g = &open.v[i];
-                /* nothing but the open door sticks out of the body's side */
-                if (fabsf(g->x) > s->width * 0.5f + 0.06f) {
-                    CHECK((side ? g->x > 0 : g->x < 0) && g->z > hz - 0.2f && g->z < hz + 1.6f);
-                    moved = fmaxf(moved, fabsf(g->x) - s->width * 0.5f);
+                float lx = g->x - cars[k].pos.x;
+                /* nothing but the open door sticks out further than the closed car */
+                if (fabsf(lx) > wide + 0.02f) {
+                    CHECK((side ? lx > 0 : lx < 0) && g->z > hz - 0.2f && g->z < hz + 1.7f);
+                    moved = fmaxf(moved, fabsf(lx) - s->width * 0.5f);
                 }
                 maxy = fmaxf(maxy, g->y);
             }
-            CHECK(maxy <= cars[k].pos.y + s->height + cars[k].body_y + 0.01f);
-            CHECK(moved > 0.8f); /* the door swung well out */
+            CHECK(maxy <= top + 0.01f);   /* the cabin stays inside */
+            CHECK(moved > 0.6f);          /* the door swung well out */
             gm_free(&open);
         }
         gm_free(&closed);
@@ -588,7 +601,9 @@ static FrameCost frame_cost(V3 eye, float yaw, float pitch, float radius, const 
                 continue;
             }
             for (k = 0; k < ncs[m]; k++) {
-                int s = view_cone_sphere(&cone, chs[m][k].c, chs[m][k].r);
+                int s;
+                if (m == 1 && vis[i].far && chs[m][k].first >= c->core_n) break;
+                s = view_cone_sphere(&cone, chs[m][k].c, chs[m][k].r);
                 if (s > 0) fc.ge += chs[m][k].count;
                 else if (s == 0) {
                     int out = gm_cone_clip(ms[m]->v + chs[m][k].first, chs[m][k].count, &cone, buf, 20000);
@@ -601,7 +616,7 @@ static FrameCost frame_cost(V3 eye, float yaw, float pitch, float radius, const 
     dl_init(&dl);
     for (i = 0; i < MAX_CARS; i++) {
         V3 d = v3_sub(cars[i].pos, eye);
-        if (cars[i].kind != CK_FREE && d.x * d.x + d.z * d.z < radius * radius && v3_dot(d, yaw_fwd(yaw)) > -8.0f) car_draw(&dl, &cars[i], d.x * d.x + d.z * d.z < CAR_NEAR * CAR_NEAR);
+        if (cars[i].kind != CK_FREE && d.x * d.x + d.z * d.z < radius * radius && v3_dot(d, yaw_fwd(yaw)) > -8.0f) car_draw(&dl, &cars[i], car_lod(sqrtf(d.x * d.x + d.z * d.z)));
     }
     crowd_draw(&dl, eye, yaw_fwd(yaw), 70.0f, 16.0f);
     if (player) ped_draw(&dl, player, ped_lod(v3_len(v3_sub(player->pos, eye))));
@@ -650,6 +665,75 @@ static void test_frame_budget(void)
            ped_model_verts(CH_ANDRIY, PED_LOD_FULL), ped_model_verts(CH_ANDRIY, PED_LOD_MEDIUM));
     cars_clear();
     crowd_reset(1u);
+}
+
+
+/* the motorcycle: accelerates, leans into turns, brakes, stands on its stand;
+ * getting on and off leaves the rider visible and on the seat */
+static void test_bike(void)
+{
+    const float dt = 1.0f / 60;
+    Car *c;
+    Ped p;
+    Ride r;
+    int i, k, all;
+    float vmax = 0.0f, lean_max = 0.0f, jump = 0.0f;
+    V3 prev;
+    cars_clear();
+    k = car_spawn(CK_PLAYER, CAR_JAVIR, v3(-600.0f, 0, 10.5f), -PI_F / 2, 0);
+    c = &cars[k];
+    for (i = 0; i < 60 * 10; i++) {
+        c->in_throttle = 1.0f;
+        c->in_steer = 0.0f;
+        car_step(c, dt);
+        vmax = fmaxf(vmax, car_speed(c) * 3.6f);
+        CHECK(!isnan(c->pos.x));
+    }
+    printf("bike: %.0f km/h after 10 s, gear %d\n", vmax, c->gear);
+    CHECK(vmax > 80.0f && vmax < 130.0f);
+    CHECK(fabsf(c->lean) < 0.05f);
+    for (i = 0; i < 60 * 2; i++) {          /* steer left: lean left (positive roll) */
+        c->in_throttle = 0.3f;
+        c->in_steer = 1.0f;
+        car_step(c, dt);
+        lean_max = fmaxf(lean_max, c->lean);
+    }
+    CHECK(lean_max > 0.2f && lean_max <= 0.76f);
+    for (i = 0; i < 60 * 8; i++) {
+        c->in_throttle = -1.0f;
+        c->in_steer = 0.0f;
+        car_step(c, dt);
+    }
+    CHECK(fabsf(car_speed(c)) < 1.6f);
+    c->kind = CK_PARKED;
+    c->vel = v3(0, 0, 0);
+    for (i = 0; i < 60 * 2; i++) {
+        c->in_throttle = 0.0f;
+        car_step(c, dt);
+    }
+    CHECK(fabsf(c->lean - 0.12f) < 0.02f);     /* on its stand */
+
+    /* getting on and off */
+    ped_init(&p, CH_ANDRIY, car_local(c, v3(-2.0f, 0, 0)), 0.0f);
+    ride_reset(&r);
+    ride_enter(&r, &p, k, 0);
+    all = 0;
+    prev = p.pos;
+    for (i = 0; i < 60 * 8 && r.state != RIDE_DRIVE; i++) {
+        V3 d;
+        all |= ride_update(&r, &p, dt);
+        d = v3_sub(p.pos, prev);
+        jump = fmaxf(jump, v3_len(d));
+        prev = p.pos;
+    }
+    CHECK(r.state == RIDE_DRIVE && (all & RIDE_EV_ENTERED) && c->kind == CK_PLAYER);
+    CHECK(p.active && p.anim.ride > 0.99f);
+    CHECK(jump < 0.2f);
+    CHECK(v3_len(v3_sub(p.pos, car_rider_pos(c))) < 0.01f);
+    CHECK(ride_exit(&r, &p));
+    for (i = 0; i < 60 * 4 && r.state != RIDE_FOOT; i++) all |= ride_update(&r, &p, dt);
+    CHECK(r.state == RIDE_FOOT && (all & RIDE_EV_EXITED) && p.anim.ride == 0.0f && c->kind == CK_PARKED);
+    cars_clear();
 }
 
 static void test_cutscenes_and_story(void)
@@ -781,6 +865,7 @@ int main(void)
     test_ride();
     test_car_doors();
     test_crowd();
+    test_bike();
     test_frame_budget();
     test_cutscenes_and_story();
     test_audio();

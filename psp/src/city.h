@@ -40,7 +40,7 @@ void city_build(unsigned int seed);   /* builds all geometry and collision */
 
 /* Cells to draw for a camera, and whether each is far enough to leave out
  * its small things (see CityCell.core_n). */
-#define CITY_LOD_FAR 96.0f
+#define CITY_LOD_FAR 72.0f
 typedef struct {
     const CityCell *cell;
     int far;

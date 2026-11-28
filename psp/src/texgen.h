@@ -9,10 +9,10 @@ enum {
     T_DIRT, T_PANEL_WIN1, T_PANEL_WIN2, T_PANEL_WIN3, T_PANEL_BLANK, T_PANEL_DOOR, T_BALCONY, T_BRICK_WIN,
     T_BRICK, T_ROOF_FLAT, T_SLATE, T_ROOF_RED, T_PLASTER_WIN, T_PLASTER, T_FENCE, T_GARAGE_DOOR,
     T_METAL, T_KIOSK_FRONT, T_SIGN_PIVO, T_SIGN_KAVA, T_SIGN_TSYHARKY, T_SIGN_HAZETY, T_TENT, T_GUARDRAIL,
-    T_CONCRETE, T_BIRCH, T_POPLAR, T_BUSH, T_SUNFLOWERS, T_FIELD_WHEAT, T_FIELD_SUNFLOWER, T_HILLS,
+    T_CONCRETE, T_BIRCH, T_POPLAR, T_BUSH, T_SUNFLOWERS, T_FIELD_WHEAT, T_FIELD_SUNFLOWER, T_CAR_PARTS2,
     T_WINDOW_LIT, T_CAR_SIDE, T_CAR_PARTS, T_TIRE, T_CAR_GLASS, T_FACES_A, T_FACES_B, T_FACES_C,
     T_HAIR, T_CLOTH_TRACK, T_CLOTH_LEATHER, T_CLOTH_BLAZER, T_CLOTH_DRESS, T_CLOTH_OVERALLS, T_CLOTH_DENIM, T_CLOTH_ARMY,
-    T_FACES_D, T_FACES_E, T_CLOTH_KNIT, T_BUS_SIDE, T_LAMP, T_BENCH, T_SHADOW, T_FLARE,
+    T_FACES_D, T_FACES_E, T_CLOTH_KNIT, T_LIVERY, T_CAR_INTERIOR, T_BENCH, T_SHADOW, T_FLARE,
     T_COUNT
 };
 
@@ -26,6 +26,46 @@ enum {
 #define CP_INDICATOR       40, 34, 8, 6
 #define CP_BUMPER          0, 48, 64, 6
 #define CP_DARK            32, 40, 8, 8
+#define CP_CHROME          48, 34, 16, 6
+#define CP_BLACK_PLASTIC   40, 40, 8, 8
+
+/* T_CAR_PARTS2: grilles, lights and wheels that make each model its own */
+#define C2_KIDNEYS         0, 0, 32, 12    /* twin chrome-framed kidneys */
+#define C2_SLOTS7          32, 0, 32, 12   /* seven vertical slots */
+#define C2_UAZ             0, 12, 32, 12   /* tall vertical slats */
+#define C2_MOSK            32, 12, 32, 8   /* chrome horizontal bars */
+#define C2_TRUCK           32, 20, 32, 12  /* big truck grille */
+#define C2_QUAD            0, 24, 32, 8    /* four round headlights in a black band */
+#define C2_RIM_ALLOY       0, 32, 16, 16
+#define C2_RIM_STEEL       16, 32, 16, 16
+#define C2_RIM_TRUCK       32, 32, 16, 16
+#define C2_RIM_SPOKES      48, 32, 16, 16
+#define C2_CANVAS          0, 48, 16, 16
+#define C2_BEACON_BLUE     16, 48, 16, 8
+#define C2_BEACON_RED      16, 56, 16, 8
+#define C2_TANK            32, 48, 16, 16  /* motorcycle tank */
+#define C2_RECT_SLANT      48, 48, 16, 8   /* wedge headlight */
+#define C2_MIRROR          48, 56, 16, 8   /* mirror glass */
+
+/* T_LIVERY: police, taxi, ambulance and fire markings */
+#define LV_POLICE          0, 0, 64, 12    /* white МІЛІЦІЯ on blue */
+#define LV_CHECKER         0, 12, 64, 8
+#define LV_TAXI            0, 20, 64, 12   /* ТАКСІ roof sign */
+#define LV_AMBULANCE       0, 32, 64, 12   /* red ШВИДКА on white */
+#define LV_CROSS           0, 44, 16, 16
+#define LV_FIRE            16, 44, 48, 10  /* white ПОЖЕЖНА on red */
+#define LV_03              16, 54, 24, 10
+#define LV_01              40, 54, 24, 10
+
+/* T_CAR_INTERIOR */
+#define IN_DASH            0, 0, 32, 16    /* instrument cluster */
+#define IN_CONSOLE         32, 0, 32, 16   /* radio and heater */
+#define IN_VELOUR          0, 16, 16, 16
+#define IN_LEATHER         16, 16, 16, 16
+#define IN_VINYL           32, 16, 16, 16
+#define IN_DOOR            48, 16, 16, 16
+#define IN_CARPET          0, 32, 16, 16
+#define IN_WOOD            16, 32, 16, 16
 
 /* Small cloth patterns, 32x32 quarters of T_HAIR (pixels) */
 #define SC_HAIR   0, 0, 32, 32

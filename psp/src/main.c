@@ -259,6 +259,11 @@ static void begin_session(void)
         int k = car_spawn(CK_PARKED, CAR_LASTIVKA, L.car_pos, L.car_yaw, FAMILY_CAR_PAINT);
         if (k >= 0) cars[k].own = 1;
     }
+    {
+        /* the motorcycle by the house, on its stand */
+        V3 r = yaw_right(POI_CAR_YAW), f = yaw_fwd(POI_CAR_YAW);
+        car_spawn(CK_PARKED, CAR_JAVIR, v3(POI_CAR.x + r.x * 2.6f - f.x * 1.5f, 0, POI_CAR.z + r.z * 2.6f - f.z * 1.5f), POI_CAR_YAW, 0);
+    }
     if (L.story.mission == M_TAIL)
         car_spawn(CK_CHASER, CAR_GELENDER, v3(player->pos.x + 30, 0, player->pos.z), 0, KABAN_CAR_PAINT);
     ride_reset(&ride);
@@ -319,7 +324,9 @@ static void flee_driver(V3 at, float away_yaw)
 static void player_drive_tick(float dt, unsigned int buttons, unsigned int pressed, const SceCtrlData *pad)
 {
     Car *c = &cars[car_idx];
+    const CarSpec *cs = &CAR_SPECS[c->type];
     float ax = analog(pad->Lx), ay = -analog(pad->Ly), throttle = ay;
+    int bike = cs->body == BODY_BIKE;
     if (buttons & PSP_CTRL_CROSS) throttle = 1.0f;
     if (buttons & PSP_CTRL_SQUARE) throttle = -1.0f;
     c->in_throttle = throttle;
@@ -327,18 +334,51 @@ static void player_drive_tick(float dt, unsigned int buttons, unsigned int press
     c->in_handbrake = (buttons & PSP_CTRL_CIRCLE) != 0;
     car_step(c, dt);
     if (c->impact > 5.0f) synth_sfx(SFX_CRASH);
-    if (pressed & PSP_CTRL_UP) synth_sfx(SFX_HORN);
+    /* up: the siren on police, ambulance and fire vehicles, the horn on the rest */
+    if (pressed & PSP_CTRL_UP) {
+        if (cs->beacon != BEACON_NONE && cs->beacon != BEACON_TAXI) {
+            c->siren = !c->siren;
+            synth_siren(c->siren);
+        } else {
+            synth_horn(cs->sound);
+        }
+    }
     if (pressed & PSP_CTRL_RIGHT) { L.radio = (L.radio + 1) % RADIO_STATIONS; radio_track_i = 0; radio_play(); }
     if (pressed & PSP_CTRL_LEFT) { L.radio = (L.radio + RADIO_STATIONS - 1) % RADIO_STATIONS; radio_track_i = 0; radio_play(); }
+    synth_engine_voice(cs->sound);
+    synth_engine_load(fabsf(throttle));
     synth_engine(1, clampf((c->rpm - 800.0f) / 5400.0f, 0.0f, 1.0f));
     radio_tick();
-    player->pos = car_seat_point(c);
+    if (bike) {
+        /* the rider sits on the motorcycle and leans with it */
+        player->pos = car_rider_pos(c);
+        player->anim.ride = 1.0f;
+        player->anim.lean = c->lean;
+        player->anim.t += dt;
+        if (c->impact > 6.5f) {
+            /* thrown off: the bike falls over, the rider lands beside it */
+            V3 f = yaw_fwd(c->yaw);
+            ride_force_out(&ride, player);
+            player->pos = v3_add(c->pos, v3_scale(f, 1.2f));
+            player->vel = v3_scale(f, 3.0f);
+            player->knock_t = 3.0f;
+            c->kind = CK_PARKED;
+            c->lean = c->steer >= 0.0f ? 0.9f : -0.9f;
+            synth_engine(0, 0.0f);
+            synth_siren(0);
+            synth_music(-1);
+            return;
+        }
+    } else {
+        player->pos = car_seat_point(c);
+    }
     player->yaw = c->yaw;
     if (pressed & PSP_CTRL_TRIANGLE) {
         c->in_throttle = 0.0f;
         c->in_handbrake = 1;
         if (ride_exit(&ride, player)) {
             synth_engine(0, 0.0f);
+            synth_siren(0);
             synth_music(-1);
         }
     }
@@ -348,6 +388,7 @@ static void force_exit_car(void)
 {
     ride_force_out(&ride, player);
     synth_engine(0, 0.0f);
+    synth_siren(0);
     synth_music(-1);
 }
 
@@ -424,7 +465,7 @@ static void build_dynamic(V3 eye, float yaw, float radius)
         d = v3_sub(c->pos, eye);
         if (d.x * d.x + d.z * d.z > radius * radius) continue;
         if (d.x * f.x + d.z * f.z < -8.0f) continue;
-        car_draw(&dyn, c, d.x * d.x + d.z * d.z < CAR_NEAR * CAR_NEAR);
+        car_draw(&dyn, c, car_lod(sqrtf(d.x * d.x + d.z * d.z)));
     }
     for (i = 0; i < N_ACTORS; i++) {
         const Ped *p = &peds[i];
@@ -473,6 +514,23 @@ static void draw_world(V3 eye, float yaw, float pitch, const SkyState *sky, floa
             r_flare(car_light_pos(c, 2), 0.45f, 0xC02020FFu);
             r_flare(car_light_pos(c, 3), 0.45f, 0xC02020FFu);
         }
+    /* beacons: police and ambulance blue, fire blue and red, flashing in turn; the taxi's green lamp */
+    for (i = 0; i < MAX_CARS; i++) {
+        const Car *c = &cars[i];
+        V3 bp[4], d;
+        unsigned int bc[4];
+        int n, k;
+        if (c->kind == CK_FREE || !c->siren) continue;
+        d = v3_sub(c->pos, eye);
+        if (d.x * d.x + d.z * d.z > 140.0f * 140.0f) continue;
+        n = car_beacons(c, bp, bc);
+        for (k = 0; k < n; k++) {
+            int taxi = CAR_SPECS[c->type].beacon == BEACON_TAXI;
+            int on = taxi || (((int)(sky->time_s * 6.0f) + k) & 1);
+            if (taxi && sky->night < 0.3f) continue;
+            if (on) r_flare(bp[k], taxi ? 0.35f : 0.55f + 0.35f * sky->night, bc[k]);
+        }
+    }
     r_clouds(eye, sky);
     if (markers) {
         V3 m;
@@ -837,9 +895,16 @@ int main(void)
                 hud.speed_kmh = fabsf(car_speed(&cars[car_idx])) * 3.6f;
                 hud.rpm = cars[car_idx].rpm;
                 hud.gear = cars[car_idx].gear;
-                hud.hint = "✕ газ  □ гальмо  ○ ручник  △ вийти  ↑ сигнал  ←→ радіо";
-            } else if (pstate == P_FOOT && car_nearest(player->pos, 4.5f, NULL) >= 0) {
-                hud.hint = "△ — сісти в машину";
+                {
+                    const CarSpec *hs = &CAR_SPECS[cars[car_idx].type];
+                    if (hs->body == BODY_BIKE) hud.hint = "✕ газ  □ гальмо  ○ заднє гальмо  △ злізти  ↑ сигнал";
+                    else if (hs->beacon != BEACON_NONE && hs->beacon != BEACON_TAXI)
+                        hud.hint = "✕ газ  □ гальмо  ○ ручник  △ вийти  ↑ сирена  ←→ радіо";
+                    else hud.hint = "✕ газ  □ гальмо  ○ ручник  △ вийти  ↑ сигнал  ←→ радіо";
+                }
+            } else if (pstate == P_FOOT) {
+                int near_k = car_nearest(player->pos, 4.5f, NULL);
+                if (near_k >= 0) hud.hint = CAR_SPECS[cars[near_k].type].body == BODY_BIKE ? "△ — сісти на мотоцикл" : "△ — сісти в машину";
             }
             hud.radio_text = radio_buf;
             hud.radio_timer = radio_timer;

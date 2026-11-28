@@ -134,6 +134,7 @@ typedef struct {
     float t;
     float phase, phase2;
     float lp;
+    int voice;          /* horn: which vehicle */
 } Sfx;
 
 static Voice voices[3];
@@ -145,9 +146,9 @@ static float hat_prev;
 static volatile int req_track = -1;
 static int cur_track = -1, step, loops;
 static float step_pos, samples_per_step;
-static volatile int engine_on;
-static volatile float engine_rpm;
-static float engine_smooth, engine_phase, engine_amp;
+static volatile int engine_on, engine_voice, horn_voice, siren_on;
+static volatile float engine_rpm, engine_load;
+static float engine_smooth, engine_load_s, engine_amp;
 static volatile float vol_music = 0.8f, vol_sfx = 1.0f;
 
 #define QSIZE 16
@@ -230,6 +231,16 @@ void synth_engine(int on, float rpm)
 {
     engine_on = on;
     engine_rpm = rpm < 0.0f ? 0.0f : (rpm > 1.0f ? 1.0f : rpm);
+}
+
+void synth_engine_voice(int voice) { engine_voice = voice < 0 || voice >= ENG_COUNT ? 0 : voice; }
+void synth_engine_load(float throttle) { engine_load = throttle < 0.0f ? 0.0f : (throttle > 1.0f ? 1.0f : throttle); }
+void synth_siren(int on) { siren_on = on; }
+
+void synth_horn(int voice)
+{
+    horn_voice = voice;
+    synth_sfx(SFX_HORN);
 }
 
 void synth_volumes(float music, float sfx_vol)
@@ -351,6 +362,7 @@ static void start_sfx(int id)
     }
     memset(&sfx[slot], 0, sizeof(Sfx));
     sfx[slot].id = id;
+    sfx[slot].voice = horn_voice;
 }
 
 static float arp_note(float t, const float *f, int n, float each, float *phase)
@@ -398,14 +410,26 @@ static float sfx_sample(Sfx *s)
         out = arp_note(t, F, 2, 0.07f, &s->phase) * 0.13f;
         break;
     }
-    case SFX_HORN:
-        len = 0.45f;
-        s->phase += 349.2f * dt;
-        s->phase2 += 440.0f * dt;
+    case SFX_HORN: {
+        /* two-tone car horn; the old off-roaders buzz on one note, the truck
+         * blares low, the motorcycle beeps */
+        float f1 = 349.2f, f2 = 440.0f, a = 0.1f;
+        switch (s->voice) {
+        case ENG_UAZ:     f1 = 410.0f; f2 = 0.0f; a = 0.14f; break;
+        case ENG_TRUCK:   f1 = 180.0f; f2 = 227.0f; a = 0.16f; len = 0.7f; break;
+        case ENG_2STROKE: f1 = 560.0f; f2 = 0.0f; a = 0.1f; break;
+        case ENG_I6: case ENG_V8: case ENG_V8_BIG: f1 = 415.3f; f2 = 523.3f; break;
+        default: break;
+        }
+        if (len == 0.0f) len = 0.45f;
+        s->phase += f1 * dt;
+        s->phase2 += f2 * dt;
         if (s->phase >= 1.0f) s->phase -= 1.0f;
         if (s->phase2 >= 1.0f) s->phase2 -= 1.0f;
-        out = (pulse(s->phase, 0.5f) + pulse(s->phase2, 0.5f)) * 0.12f;
+        s->lp += ((pulse(s->phase, 0.4f) + (f2 > 0.0f ? pulse(s->phase2, 0.5f) : 0.0f)) - s->lp) * 0.35f;  /* takes the fizz off */
+        out = s->lp * a * (t < 0.02f ? t / 0.02f : 1.0f);
         break;
+    }
     case SFX_MISSION:
         len = 0.7f;
         out = arp_note(t, WIN, 4, 0.1f, &s->phase) * 0.15f * (t > 0.4f ? expf(-(t - 0.4f) * 8.0f) : 1.0f);
@@ -435,16 +459,95 @@ static float sfx_sample(Sfx *s)
     return out;
 }
 
+/* Engines: every firing of a cylinder is a short exhaust pulse that dies
+ * away, a little stronger or weaker per cylinder (the lope of a V8, the
+ * rasp of a tired four), through a resonant "exhaust" filter that opens
+ * with revs and throttle; plus the cam beat and, on the old off-roaders, the
+ * whine of the transfer box. */
+typedef struct {
+    float idle_hz, max_hz;   /* crankshaft revolutions per second */
+    int fires;               /* firings per two revolutions */
+    float decay;             /* how fast a pulse dies (1/s) */
+    float body_hz, body_q;   /* exhaust resonance */
+    float rasp, sub, whine, gain;
+    float uneven[8];
+} EngineVoice;
+
+static const EngineVoice ENGINES[ENG_COUNT] = {
+    /* idle  max   fires decay body  q     rasp  sub   whine gain */
+    { 13.5f, 105.0f, 6, 260.0f, 170.0f, 1.0f, 0.15f, 0.05f, 0.0f, 0.85f, { 1, 0.96f, 1.03f, 0.98f, 1.02f, 0.97f, 1, 1 } },   /* I6 */
+    { 14.0f, 100.0f, 4, 230.0f, 140.0f, 0.9f, 0.3f, 0.06f, 0.0f, 0.85f, { 1, 0.88f, 1.06f, 0.92f, 1, 1, 1, 1 } },           /* I4 */
+    { 13.0f, 95.0f, 4, 180.0f, 110.0f, 0.8f, 0.45f, 0.12f, 0.0f, 0.9f, { 1, 0.8f, 1.12f, 0.86f, 1, 1, 1, 1 } },             /* raspy I4 */
+    { 11.0f, 95.0f, 8, 210.0f, 95.0f, 1.3f, 0.2f, 0.35f, 0.0f, 0.95f, { 1, 0.7f, 1.12f, 0.78f, 1.04f, 0.74f, 1.16f, 0.82f } }, /* V8 */
+    { 10.0f, 85.0f, 8, 170.0f, 75.0f, 1.5f, 0.22f, 0.45f, 0.0f, 1.0f, { 1, 0.66f, 1.15f, 0.75f, 1.06f, 0.7f, 1.2f, 0.8f } },  /* big V8 */
+    { 12.0f, 70.0f, 4, 150.0f, 82.0f, 0.9f, 0.38f, 0.2f, 0.16f, 0.95f, { 1, 0.78f, 1.14f, 0.84f, 1, 1, 1, 1 } },            /* UAZ */
+    { 9.0f, 52.0f, 8, 120.0f, 58.0f, 1.2f, 0.3f, 0.42f, 0.1f, 1.1f, { 1, 0.75f, 1.1f, 0.8f, 1.05f, 0.72f, 1.12f, 0.85f } },   /* truck */
+    { 22.0f, 125.0f, 4, 520.0f, 360.0f, 2.6f, 0.5f, 0.0f, 0.0f, 0.75f, { 1, 0.92f, 1.04f, 0.95f, 1, 1, 1, 1 } },            /* two-stroke twin */
+};
+
+static float eng_fire_phase, eng_cam_phase, eng_whine_phase, eng_env, eng_low, eng_band, eng_hp_prev, eng_out_lp;
+static int eng_cyl;
+
+/* siren: a slow wail between two notes */
+static float siren_phase, siren_lfo, siren_amp;
+
 static float engine_sample(void)
 {
     const float dt = 1.0f / SYNTH_RATE;
-    float target = engine_on ? 0.1f + engine_rpm * 0.07f : 0.0f;
+    const EngineVoice *v = &ENGINES[engine_voice];
+    float target = engine_on ? v->gain * (0.12f + engine_smooth * 0.05f + engine_load_s * 0.05f) : 0.0f;
+    float rev, fire, x, f, fc, out;
     engine_amp += (target - engine_amp) * 0.0005f;
-    engine_smooth += (engine_rpm - engine_smooth) * 0.0002f;
+    engine_smooth += (engine_rpm - engine_smooth) * 0.0003f;
+    engine_load_s += (engine_load - engine_load_s) * 0.0004f;
     if (engine_amp < 0.0005f) return 0.0f;
-    engine_phase += (38.0f + engine_smooth * 110.0f) * dt;
-    if (engine_phase >= 1.0f) engine_phase -= 1.0f;
-    return (pulse(engine_phase, 0.3f) * 0.8f + noise() * 0.15f) * engine_amp;
+    rev = v->idle_hz + (v->max_hz - v->idle_hz) * engine_smooth;
+    fire = rev * (float)v->fires * 0.5f;
+    eng_fire_phase += fire * dt;
+    if (eng_fire_phase >= 1.0f) {
+        eng_fire_phase -= 1.0f;
+        eng_cyl = (eng_cyl + 1) % v->fires;
+        eng_env = v->uneven[eng_cyl & 7] * (0.55f + 0.45f * engine_load_s) * (0.9f + 0.2f * (noise() * 0.5f + 0.5f));
+    }
+    x = eng_env * (1.0f - v->rasp + v->rasp * noise());
+    eng_env -= eng_env * v->decay * dt;
+    /* cam beat and gear whine */
+    eng_cam_phase += rev * 0.5f * dt;
+    if (eng_cam_phase >= 1.0f) eng_cam_phase -= 1.0f;
+    x += v->sub * tri(eng_cam_phase) * 0.35f;
+    /* resonant exhaust: a state-variable filter, opening with revs and load */
+    fc = v->body_hz * (1.0f + 1.6f * engine_smooth) * (0.75f + 0.5f * engine_load_s);
+    f = 2.0f * 3.14159f * fc * dt;
+    if (f > 0.9f) f = 0.9f;
+    {
+        float hp = x - eng_low - eng_band / v->body_q;
+        eng_band += f * hp;
+        eng_low += f * eng_band;
+        eng_hp_prev = hp;
+    }
+    out = eng_low * 0.8f + eng_band * 0.7f;
+    if (v->whine > 0.0f) {
+        eng_whine_phase += rev * 7.0f * dt;
+        if (eng_whine_phase >= 1.0f) eng_whine_phase -= 1.0f;
+        out += v->whine * tri(eng_whine_phase) * engine_smooth * 0.25f;
+    }
+    eng_out_lp += (out - eng_out_lp) * 0.6f;
+    return eng_out_lp * engine_amp * 2.2f;
+}
+
+static float siren_sample(void)
+{
+    const float dt = 1.0f / SYNTH_RATE;
+    float f, w;
+    siren_amp += ((siren_on ? 0.11f : 0.0f) - siren_amp) * 0.0008f;
+    if (siren_amp < 0.0005f) return 0.0f;
+    siren_lfo += 0.32f * dt;
+    if (siren_lfo >= 1.0f) siren_lfo -= 1.0f;
+    w = tri(siren_lfo) * 0.5f + 0.5f;
+    f = 620.0f + 720.0f * w * w;
+    siren_phase += f * dt;
+    if (siren_phase >= 1.0f) siren_phase -= 1.0f;
+    return (tri(siren_phase) * 0.8f + pulse(siren_phase, 0.5f) * 0.2f) * siren_amp;
 }
 
 void synth_render(short *stereo, int frames)
@@ -463,7 +566,7 @@ void synth_render(short *stereo, int frames)
         int v;
         for (k = 0; k < MAX_SFX; k++)
             if (sfx[k].id >= 0) e += sfx_sample(&sfx[k]);
-        e += engine_sample();
+        e += engine_sample() + siren_sample();
         mix = m + e * vs;
         /* soft clip */
         if (mix > 1.0f) mix = 1.0f;

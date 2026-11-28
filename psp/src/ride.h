@@ -23,6 +23,8 @@ typedef struct {
     float t;
     V3 flee_pos;
     float flee_yaw;
+    V3 start;          /* where an animation started from */
+    float start_yaw;
 } Ride;
 
 void ride_reset(Ride *r);

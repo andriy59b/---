@@ -10,6 +10,7 @@
 #include "../src/actor.h"
 #include "../src/cutscene.h"
 #include "../src/crowd.h"
+#include "../src/ride.h"
 #include "../src/city.h"
 
 static unsigned int atlas[TEX_SIZE * TEX_SIZE];
@@ -207,6 +208,25 @@ int main(int argc, char **argv)
         npeds = 0;
         cars_clear();
     }
+    /* every vehicle from the front and the back three-quarters */
+    {
+        int t;
+        for (t = 0; t < CAR_TYPES; t++) {
+            char name[32];
+            const CarSpec *cs = &CAR_SPECS[t];
+            float dist = cs->length * 0.62f + 1.1f;
+            Car *c;
+            cars_clear();
+            c = &cars[car_spawn(CK_PARKED, t, v3(410.0f, 0, 8.0f), -PI_F / 2, 0xFF3A2A9Au)];
+            res_scale = 2;
+            snprintf(name, sizeof(name), "veh%d_front", t);
+            shot(dir, name, car_local(c, v3(-dist * 0.55f, cs->height * 0.75f + 0.4f, -dist * 0.8f)), car_local(c, v3(0, cs->height * 0.42f, 0)));
+            snprintf(name, sizeof(name), "veh%d_rear", t);
+            shot(dir, name, car_local(c, v3(dist * 0.55f, cs->height * 0.75f + 0.4f, dist * 0.8f)), car_local(c, v3(0, cs->height * 0.42f, 0)));
+            res_scale = 1;
+        }
+        cars_clear();
+    }
     /* doors of every car: closed, driver door open, passenger door open, and
      * the chase camera behind the car while the driver door is open */
     {
@@ -216,6 +236,7 @@ int main(int argc, char **argv)
         for (t = 0; t < CAR_TYPES; t++) {
             char name[32];
             Car *c;
+            if (CAR_IS_BIKE(t)) continue;
             cars_clear();
             k = car_spawn(CK_PARKED, t, v3(410.0f, 0, 8.0f), -PI_F / 2, PAINT[t]);
             c = &cars[k];
@@ -231,7 +252,7 @@ int main(int argc, char **argv)
             npeds = 1;
             ped_init(&peds[0], CH_ANDRIY, car_seat_point(c), c->yaw);
             peds[0].anim.sit = 1.0f;
-            peds[0].pos.y = fminf(0.0f, CAR_SPECS[t].height - 0.1f - 1.53f);
+            { CarLayout lay; car_layout(t, &lay); peds[0].pos.y = lay.seat_y; }
             snprintf(name, sizeof(name), "cardoor%d_inside", t);
             shot(dir, name, car_local(c, v3(-3.0f, 1.7f, 1.4f)), car_local(c, v3(-0.3f, 0.8f, -0.5f)));
             npeds = 0;
@@ -243,6 +264,47 @@ int main(int argc, char **argv)
             shot(dir, name, car_local(c, v3(3.6f, 1.5f, -3.4f)), car_local(c, v3(0, 0.7f, 0.0f)));
             res_scale = 1;
         }
+        cars_clear();
+    }
+    /* the motorcycle with Andriy riding it into a left turn, and getting into a car */
+    {
+        Car *c;
+        int k2;
+        Ride rd;
+        float tt;
+        cars_clear();
+        k2 = car_spawn(CK_PLAYER, CAR_JAVIR, v3(410.0f, 0, 8.0f), -PI_F / 2, 0);
+        c = &cars[k2];
+        c->lean = 0.35f;
+        c->body_roll = 0.35f;
+        c->steer = 0.12f;
+        npeds = 1;
+        ped_init(&peds[0], CH_ANDRIY, car_rider_pos(c), c->yaw);
+        peds[0].anim.ride = 1.0f;
+        peds[0].anim.lean = c->lean;
+        res_scale = 2;
+        shot(dir, "bike_ride", car_local(c, v3(-2.6f, 1.3f, -2.2f)), car_local(c, v3(0, 0.8f, 0)));
+        shot(dir, "bike_ride_back", car_local(c, v3(1.2f, 1.6f, 3.2f)), car_local(c, v3(0, 0.8f, 0)));
+        /* getting into the Lastivka: frames through the new animation */
+        cars_clear();
+        k2 = car_spawn(CK_PARKED, CAR_LASTIVKA, v3(410.0f, 0, 8.0f), -PI_F / 2, 0xFF3A2A9Au);
+        c = &cars[k2];
+        ped_init(&peds[0], CH_ANDRIY, car_door_point(c, 0), 0.0f);
+        ride_reset(&rd);
+        ride_enter(&rd, &peds[0], k2, 0);
+        for (tt = 0.0f; tt < 8.0f && rd.state != RIDE_DRIVE; tt += 1.0f / 60) {
+            int before = rd.state;
+            float rt = rd.t;
+            ride_update(&rd, &peds[0], 1.0f / 60);
+            if (rd.state == RIDE_IN && ((rt < 0.3f && rd.t >= 0.3f) || (rt < 0.6f && rd.t >= 0.6f) || (rt < 0.95f && rd.t >= 0.95f))) {
+                char name[32];
+                snprintf(name, sizeof(name), "enter_%d", (int)(rd.t * 10));
+                shot(dir, name, car_local(c, v3(-3.2f, 1.6f, 1.6f)), car_local(c, v3(-0.4f, 0.8f, -0.2f)));
+            }
+            (void)before;
+        }
+        res_scale = 1;
+        npeds = 0;
         cars_clear();
     }
     /* characters: cast line-up, the passers-by, close-ups of faces */

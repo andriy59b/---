@@ -53,7 +53,7 @@ int car_spawn(int kind, int type, V3 pos, float yaw, unsigned int paint)
             c->pos = pos;
             c->pos.y = city_ground(pos.x, pos.z);
             c->yaw = yaw;
-            c->paint = paint;
+            c->paint = CAR_SPECS[type].fixed_paint ? CAR_SPECS[type].fixed_paint : paint;  /* the G is always black */
             c->gear = 1;
             c->rpm = IDLE_RPM;
             c->band_done = -999;
@@ -70,19 +70,27 @@ int car_find_kind(int kind)
     return -1;
 }
 
+int car_lod(float dist) { return dist < CAR_NEAR ? 2 : (dist < CAR_MID ? 1 : 0); }
+
 float car_speed(const Car *c) { return v3_dot(c->vel, yaw_fwd(c->yaw)); }
 
 V3 car_door_point(const Car *c, int side)
 {
     const CarSpec *s = &CAR_SPECS[c->type];
-    float x = (s->width * 0.5f + 0.55f) * (side ? 1.0f : -1.0f);
-    return car_local(c, v3(x, 0, -s->length * 0.5f + s->ws_base + s->length * 0.13f));
+    CarLayout L;
+    float x;
+    car_layout(c->type, &L);
+    if (s->body == BODY_BIKE) return car_local(c, v3(side ? 0.6f : -0.6f, 0, -s->length * 0.5f + L.seat_d));
+    x = (s->width * 0.5f + 0.55f) * (side ? 1.0f : -1.0f);
+    return car_local(c, v3(x, 0, -s->length * 0.5f + (L.door_d0 + L.door_d1) * 0.5f + 0.1f));
 }
 
 V3 car_seat_point(const Car *c)
 {
     const CarSpec *s = &CAR_SPECS[c->type];
-    return car_local(c, v3(-s->width * 0.22f, 0, -s->length * 0.5f + s->ws_base + s->length * 0.15f));
+    CarLayout L;
+    car_layout(c->type, &L);
+    return car_local(c, v3(L.seat_x, 0, -s->length * 0.5f + L.seat_d));
 }
 
 int car_nearest(V3 pos, float maxd, int *side)
@@ -280,6 +288,9 @@ float car_push_point(V3 *p, float radius)
 
 /* -------------------------------------------------------------- physics */
 
+/* big wheels get a shorter final drive: the same engine speed at the same road speed */
+static float final_drive(const CarSpec *s) { return s->wheel_r > 0.45f ? FINAL_DRIVE * s->wheel_r / 0.34f : FINAL_DRIVE; }
+
 static float engine_torque(const CarSpec *s, float rpm)
 {
     float peak = 4200.0f, t = (rpm - peak) / 3500.0f;
@@ -315,7 +326,7 @@ static void physics_substep(Car *c, float dt)
     }
     {
         float ratio = c->gear < 0 ? REV_GEAR : GEARS[c->gear - 1];
-        c->rpm = fabsf(u) / s->wheel_r * ratio * FINAL_DRIVE * 60.0f / 6.2831853f;
+        c->rpm = fabsf(u) / s->wheel_r * ratio * final_drive(s) * 60.0f / 6.2831853f;
         if (c->rpm < IDLE_RPM + 2600.0f * fabsf(throttle) && (c->gear == 1 || c->gear < 0))
             c->rpm = IDLE_RPM + 2600.0f * fabsf(throttle); /* clutch slip when pulling away */
         if (c->rpm < IDLE_RPM) c->rpm = IDLE_RPM;
@@ -324,9 +335,9 @@ static void physics_substep(Car *c, float dt)
         if (c->rpm > RED_RPM) c->rpm = RED_RPM;
         if (brk == 0.0f) {
             if (c->gear > 0 && throttle > 0.0f)
-                drive = throttle * engine_torque(s, c->rpm) * GEARS[c->gear - 1] * FINAL_DRIVE / s->wheel_r * 0.85f;
+                drive = throttle * engine_torque(s, c->rpm) * GEARS[c->gear - 1] * final_drive(s) / s->wheel_r * 0.85f;
             else if (c->gear < 0 && throttle < 0.0f)
-                drive = throttle * engine_torque(s, c->rpm) * REV_GEAR * FINAL_DRIVE / s->wheel_r * 0.6f;
+                drive = throttle * engine_torque(s, c->rpm) * REV_GEAR * final_drive(s) / s->wheel_r * 0.6f;
         }
     }
     if (c->rpm >= RED_RPM - 1.0f) drive *= 0.2f;
@@ -421,11 +432,69 @@ static void physics_substep(Car *c, float dt)
     }
 }
 
+/* Motorcycle: a bicycle model (no sideways slip), leaning into the turn at
+ * the angle that balances it; four gears for the engine note. */
+static void bike_substep(Car *c, float dt)
+{
+    const CarSpec *s = &CAR_SPECS[c->type];
+    const float m = s->mass, L = s->wheelbase;
+    V3 f = yaw_fwd(c->yaw);
+    float u = v3_dot(c->vel, f), vmax = s->top_kmh / 3.6f, cd = s->power_kw * 1000.0f / (vmax * vmax * vmax);
+    float throttle = c->in_throttle, F = 0.0f, steer_target, lean_target;
+    /* steering: little lock at speed */
+    steer_target = c->in_steer * s->max_steer / (1.0f + fabsf(u) / 5.0f);
+    c->steer = approach(c->steer, steer_target, 3.0f * dt);
+    /* gearbox and engine */
+    if (c->gear < 1) c->gear = 1;
+    c->rpm = fabsf(u) / s->wheel_r * GEARS[c->gear - 1] * FINAL_DRIVE * 1.25f * 60.0f / 6.2831853f;
+    if (c->rpm < IDLE_RPM + 3200.0f * (throttle > 0 ? throttle : 0.0f) && c->gear == 1) c->rpm = IDLE_RPM + 3200.0f * (throttle > 0 ? throttle : 0.0f);
+    if (c->rpm < IDLE_RPM) c->rpm = IDLE_RPM;
+    if (c->rpm > RED_RPM * 0.9f && c->gear < 4) c->gear++;
+    if (c->gear > 1 && c->rpm < RED_RPM * 0.4f) c->gear--;
+    if (c->rpm > RED_RPM) c->rpm = RED_RPM;
+    if (throttle > 0.05f) {
+        if (u < -0.3f) F = throttle * m * 6.0f;                                   /* stop rolling back */
+        else F = throttle * engine_torque(s, c->rpm) * GEARS[c->gear - 1] * FINAL_DRIVE * 1.25f / s->wheel_r * 0.85f;
+    } else if (throttle < -0.05f) {
+        if (u > 0.4f) F = throttle * m * 7.5f;                                     /* both brakes */
+        else if (u > -1.4f) F = throttle * m * 1.2f;                               /* paddle backwards */
+    }
+    if (c->in_handbrake && fabsf(u) > 0.2f) F -= (u > 0 ? 1.0f : -1.0f) * m * 3.5f; /* rear brake */
+    F -= cd * u * fabsf(u) + u * m * 0.015f;
+    if (fabsf(throttle) < 0.02f && fabsf(u) < 0.3f) u *= 0.9f;
+    u += F / m * dt;
+    if (c->kind == CK_PARKED && fabsf(u) < 0.3f) u = 0.0f;
+    c->yaw_rate = u * tanf(c->steer) / L;
+    c->vel = v3_scale(f, u);
+    c->pos = v3_add(c->pos, v3_scale(c->vel, dt));
+    c->yaw = wrap_pi(c->yaw + c->yaw_rate * dt);
+    /* lean: balance angle while riding, the stand when parked, lying down after a fall */
+    if (c->kind == CK_PARKED) lean_target = fabsf(c->lean) > 0.5f ? (c->lean > 0 ? 1.35f : -1.35f) : 0.12f;
+    else lean_target = clampf(atanf(u * c->yaw_rate / G), -0.75f, 0.75f);
+    c->lean = approach(c->lean, lean_target, 3.0f * dt);
+    c->body_roll = c->lean;
+    c->body_pitch = 0.0f;
+    c->ax = F / m;
+    c->skid = c->in_handbrake && fabsf(u) > 5.0f ? 0.6f : 0.0f;
+}
+
 void car_step(Car *c, float dt)
 {
     const CarSpec *s = &CAR_SPECS[c->type];
     float t = 0.0f, gy;
     c->impact = 0.0f;
+    if (s->body == BODY_BIKE) {
+        while (t < dt - 1e-5f) {
+            float h = dt - t < SUBSTEP ? dt - t : SUBSTEP;
+            bike_substep(c, h);
+            collide_static(c);
+            t += h;
+        }
+        c->pos.y = city_ground(c->pos.x, c->pos.z);
+        c->curb_pitch = c->curb_roll = 0.0f;
+        c->wheel_spin = fmodf(c->wheel_spin + car_speed(c) / s->wheel_r * dt, 6.2831853f);
+        return;
+    }
     while (t < dt - 1e-5f) {
         float h = dt - t < SUBSTEP ? dt - t : SUBSTEP;
         physics_substep(c, h);
@@ -660,8 +729,10 @@ static void try_spawn_traffic(V3 focus)
     int band;
     float along = (frnd() * 60.0f + 45.0f) * ((rnd() & 1u) ? 1.0f : -1.0f);
     V3 pos;
-    static const int TYPES[10] = { CAR_KLASYKA, CAR_KLASYKA, CAR_LASTIVKA, CAR_LASTIVKA, CAR_POLE, CAR_POLE,
-                                   CAR_KAISER, CAR_PANTERA, CAR_GELENDER, CAR_LASTIVKA };
+    static const int TYPES[20] = { CAR_KLASYKA, CAR_KLASYKA, CAR_KLASYKA, CAR_LASTIVKA, CAR_LASTIVKA, CAR_LASTIVKA,
+                                   CAR_POLE, CAR_POLE, CAR_KAISER, CAR_KAISER, CAR_PANTERA, CAR_GELENDER,
+                                   CAR_STOLYTSIA, CAR_STOLYTSIA, CAR_STOLYTSIA, CAR_BOBIK, CAR_BOBIK, CAR_BUKHANKA,
+                                   CAR_TAIGA, CAR_LASTIVKA };
     if (axis == 0) {
         band = city_band_index(focus.z) + (int)(rnd() % 3u) - 1;
         pos = v3(focus.x + along, 0, city_lane(dir, band));
@@ -677,10 +748,12 @@ static void try_spawn_traffic(V3 focus)
         d = v3_sub(cars[i].pos, pos);
         if (d.x * d.x + d.z * d.z < 100.0f) return;
     }
-    type = TYPES[rnd() % 10u];
+    type = TYPES[rnd() % 20u];
     i = car_spawn(CK_TRAFFIC, type, pos, dir_yaw(dir), PAINTS[rnd() % (sizeof(PAINTS) / sizeof(PAINTS[0]))]);
     if (i >= 0) {
         Car *c = &cars[i];
+        /* emergency vehicles on a call now and then; the taxi's lamp is always lit */
+        c->siren = CAR_SPECS[type].beacon == BEACON_TAXI || (CAR_SPECS[type].beacon != BEACON_NONE && (rnd() & 1u));
         c->dir = dir;
         c->next_dir = dir;
         c->vel = v3_scale(yaw_fwd(c->yaw), TRAFFIC_SPEED * 0.8f);
